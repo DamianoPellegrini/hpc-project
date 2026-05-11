@@ -1,0 +1,19 @@
+{
+  "lsp": {
+    "clangd": {
+      "binary": {
+        "path": "/usr/bin/clangd"
+      }
+    }
+  },
+  "languages": {
+    "C": {
+      "format_on_save": "on",
+      "tab_size": 4
+    },
+    "C++": {
+      "format_on_save": "on",
+      "tab_size": 4
+    }
+  }
+}

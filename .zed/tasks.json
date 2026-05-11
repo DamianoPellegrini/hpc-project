@@ -1,0 +1,45 @@
+[
+  {
+    "label": "cmake: configure",
+    "command": "cmake",
+    "args": ["--preset", "ninja-local"],
+    "use_new_terminal": true
+  },
+  {
+    "label": "cmake: build all",
+    "command": "cmake",
+    "args": ["--build", "--preset", "ninja-local"],
+    "use_new_terminal": true
+  },
+  {
+    "label": "cmake: build mpi_app",
+    "command": "cmake",
+    "args": ["--build", "--preset", "ninja-local", "--target", "mpi_app"],
+    "use_new_terminal": true
+  },
+  {
+    "label": "cmake: build openmp_app",
+    "command": "cmake",
+    "args": ["--build", "--preset", "ninja-local", "--target", "openmp_app"],
+    "use_new_terminal": true
+  },
+  {
+    "label": "run: mpi_app",
+    "command": "./build/mpi/mpi_app",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true
+  },
+  {
+    "label": "run: mpi_app (2 ranks)",
+    "command": "mpirun",
+    "args": ["-np", "2", "./build/mpi/mpi_app"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true
+  },
+  {
+    "label": "run: openmp_app",
+    "command": "./build/openmp/openmp_app",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true
+  }
+]

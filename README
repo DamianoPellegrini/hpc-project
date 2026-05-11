@@ -1,0 +1,16 @@
+# Assignment - Sistemi di Calcolo Parallelo - Boruvka's MST algorithm
+
+This project aims to show the parallel implementation of the Boruvka's MST algorithm.
+
+The implementation is repeated 3 times using separate hpc paradigms:
+
+- MPI
+- OpenMP
+- CUDA
+
+To compile and run the code, use the following commands:
+
+```bash
+```
+
+or use the provided Zed tasks.

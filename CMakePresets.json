@@ -1,0 +1,21 @@
+{
+  "version": 7,
+  "configurePresets": [
+    {
+      "name": "ninja-local",
+      "displayName": "Ninja local",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ninja-local",
+      "configurePreset": "ninja-local"
+    }
+  ]
+}
