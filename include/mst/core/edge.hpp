@@ -27,8 +27,8 @@ struct mst_edge {
 using maybe_candidate_edge = std::optional<candidate_edge>;
 
 inline constexpr std::pair<int, int> normalized_endpoints(edge edge_value) noexcept {
-  const int left = as_index(edge_value.u);
-  const int right = as_index(edge_value.v);
+  const int left = edge_value.u.value();
+  const int right = edge_value.v.value();
   if (left < right) {
     return {left, right};
   }

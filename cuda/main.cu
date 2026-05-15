@@ -134,8 +134,7 @@ make_device_edges(const mst::core::validated_graph &graph) {
   std::vector<device_edge> edges;
   edges.reserve(graph.edges().size());
   for (const mst::core::edge &edge : graph.edges()) {
-    edges.push_back({mst::core::as_index(edge.u), mst::core::as_index(edge.v),
-                     mst::core::as_value(edge.weight)});
+    edges.push_back({edge.u.value(), edge.v.value(), edge.weight.value()});
   }
   return mst::memory::host_buffer<device_edge, mst::memory::host_memory>{
       std::move(edges)};
@@ -145,7 +144,7 @@ std::vector<int> pack_snapshot(const mst::dsu::parent_snapshot &snapshot) {
   std::vector<int> packed;
   packed.reserve(snapshot.parent().size());
   for (const mst::core::vertex_id vertex : snapshot.parent()) {
-    packed.push_back(mst::core::as_index(vertex));
+    packed.push_back(vertex.value());
   }
   return packed;
 }
@@ -243,7 +242,7 @@ int main() {
       }
       if (auto admitted = dsu.unite(*candidate)) {
         mst_edges.push_back(*admitted);
-        total_weight += mst::core::as_value(admitted->value.weight);
+        total_weight += admitted->value.weight.value();
         changed = true;
       }
     }

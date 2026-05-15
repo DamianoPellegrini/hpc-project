@@ -32,11 +32,11 @@ inline bool has_valid_vertex_ids(const raw_graph &graph_value) {
     return false;
   }
   for (const edge &edge_value : graph_value.edges()) {
-    if (as_index(edge_value.u) < 0 || as_index(edge_value.v) < 0) {
+    if (edge_value.u.value() < 0 || edge_value.v.value() < 0) {
       return false;
     }
-    if (as_index(edge_value.u) >= graph_value.vertex_count() ||
-        as_index(edge_value.v) >= graph_value.vertex_count()) {
+    if (edge_value.u.value() >= graph_value.vertex_count() ||
+        edge_value.v.value() >= graph_value.vertex_count()) {
       return false;
     }
   }

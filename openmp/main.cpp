@@ -34,10 +34,8 @@ local_best_candidates(const mst::core::validated_graph &graph,
         continue;
       }
 
-      mst::core::consider_candidate(
-          local[static_cast<std::size_t>(mst::core::as_index(left_root))], edge);
-      mst::core::consider_candidate(
-          local[static_cast<std::size_t>(mst::core::as_index(right_root))], edge);
+      mst::core::consider_candidate(local[left_root.index()], edge);
+      mst::core::consider_candidate(local[right_root.index()], edge);
     }
 
 #pragma omp critical
@@ -82,7 +80,7 @@ int main() {
       }
 
       if (auto admitted = dsu.unite(*candidate)) {
-        total_weight += mst::core::as_value(admitted->value.weight);
+        total_weight += admitted->value.weight.value();
         mst_edges.push_back(*admitted);
         changed = true;
       }

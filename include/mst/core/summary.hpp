@@ -27,9 +27,9 @@ inline std::string mst_summary(const std::vector<mst_edge> &edges,
   out << "MST weight = " << total_weight << ", edges = " << sorted.size()
       << '\n';
   for (const mst_edge &edge_value : sorted) {
-    out << "  " << as_index(edge_value.value.u) << "-"
-        << as_index(edge_value.value.v) << " ("
-        << as_value(edge_value.value.weight) << ")\n";
+    out << "  " << edge_value.value.u.value() << "-"
+        << edge_value.value.v.value() << " ("
+        << edge_value.value.weight.value() << ")\n";
   }
   return out.str();
 }

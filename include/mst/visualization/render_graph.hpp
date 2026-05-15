@@ -219,12 +219,10 @@ make_force_layout(const mst::core::validated_graph &graph) {
     }
 
     for (const mst::core::edge &edge_value : graph.edges()) {
-      const int left = mst::core::as_index(edge_value.u);
-      const int right = mst::core::as_index(edge_value.v);
-      double dx = positions[static_cast<std::size_t>(left)].x -
-                  positions[static_cast<std::size_t>(right)].x;
-      double dy = positions[static_cast<std::size_t>(left)].y -
-                  positions[static_cast<std::size_t>(right)].y;
+      const std::size_t left = edge_value.u.index();
+      const std::size_t right = edge_value.v.index();
+      double dx = positions[left].x - positions[right].x;
+      double dy = positions[left].y - positions[right].y;
       double distance = std::sqrt(dx * dx + dy * dy);
       if (distance < 1e-6) {
         distance = 1e-6;
@@ -234,10 +232,10 @@ make_force_layout(const mst::core::validated_graph &graph) {
       const double unit_x = dx / distance;
       const double unit_y = dy / distance;
 
-      displacement[static_cast<std::size_t>(left)].x -= unit_x * force;
-      displacement[static_cast<std::size_t>(left)].y -= unit_y * force;
-      displacement[static_cast<std::size_t>(right)].x += unit_x * force;
-      displacement[static_cast<std::size_t>(right)].y += unit_y * force;
+      displacement[left].x -= unit_x * force;
+      displacement[left].y -= unit_y * force;
+      displacement[right].x += unit_x * force;
+      displacement[right].y += unit_y * force;
     }
 
     for (int vertex = 0; vertex < vertex_count; ++vertex) {
@@ -387,9 +385,9 @@ inline void draw_graph_edges(canvas &target,
     }
 
     const canvas_point &from =
-        points[static_cast<std::size_t>(mst::core::as_index(edge_value.u))];
+        points[edge_value.u.index()];
     const canvas_point &to =
-        points[static_cast<std::size_t>(mst::core::as_index(edge_value.v))];
+        points[edge_value.v.index()];
     const char *edge_color =
         mst_edge ? mst_green : non_mst_edge_color(edge_value);
     target.draw_line(from.x, from.y, to.x, to.y, edge_glyph,
@@ -413,14 +411,14 @@ inline void draw_graph_weights(canvas &target,
                                const std::vector<mst::core::mst_edge> &mst_edges) {
   for (const mst::core::edge &edge_value : graph.edges()) {
     const canvas_point &from =
-        points[static_cast<std::size_t>(mst::core::as_index(edge_value.u))];
+        points[edge_value.u.index()];
     const canvas_point &to =
-        points[static_cast<std::size_t>(mst::core::as_index(edge_value.v))];
+        points[edge_value.v.index()];
     const bool mst_edge = is_mst_edge(edge_value, mst_edges);
     const char *edge_color =
         mst_edge ? mst_green : non_mst_edge_color(edge_value);
-    draw_edge_weight(target, from, to, mst::core::as_value(edge_value.weight),
-                     1, edge_color);
+    draw_edge_weight(target, from, to, edge_value.weight.value(), 1,
+                     edge_color);
   }
 }
 

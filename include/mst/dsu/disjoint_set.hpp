@@ -28,10 +28,8 @@ private:
 inline mst::core::vertex_id find_root(const parent_snapshot &snapshot,
                                       mst::core::vertex_id vertex) {
   mst::core::vertex_id current = vertex;
-  while (snapshot.parent()[static_cast<std::size_t>(mst::core::as_index(current))] !=
-         current) {
-    current =
-        snapshot.parent()[static_cast<std::size_t>(mst::core::as_index(current))];
+  while (snapshot.parent()[current.index()] != current) {
+    current = snapshot.parent()[current.index()];
   }
   return current;
 }
@@ -52,27 +50,22 @@ public:
   }
 
   mst::core::component_id find(mst::core::vertex_id vertex) {
-    return mst::core::make_component_id(
-        mst::core::as_index(find_vertex(vertex)));
+    return mst::core::make_component_id(find_vertex(vertex).value());
   }
 
   std::optional<mst::core::mst_edge> unite(mst::core::candidate_edge candidate) {
-    mst::core::vertex_id left =
-        mst::core::make_vertex_id(mst::core::as_index(find_vertex(candidate.value.u)));
-    mst::core::vertex_id right =
-        mst::core::make_vertex_id(mst::core::as_index(find_vertex(candidate.value.v)));
+    mst::core::vertex_id left = find_vertex(candidate.value.u);
+    mst::core::vertex_id right = find_vertex(candidate.value.v);
     if (left == right) {
       return std::nullopt;
     }
 
-    if (size_[static_cast<std::size_t>(mst::core::as_index(left))] <
-        size_[static_cast<std::size_t>(mst::core::as_index(right))]) {
+    if (size_[left.index()] < size_[right.index()]) {
       std::swap(left, right);
     }
 
-    parent_[static_cast<std::size_t>(mst::core::as_index(right))] = left;
-    size_[static_cast<std::size_t>(mst::core::as_index(left))] +=
-        size_[static_cast<std::size_t>(mst::core::as_index(right))];
+    parent_[right.index()] = left;
+    size_[left.index()] += size_[right.index()];
     return mst::core::mst_edge{candidate.value};
   }
 
@@ -100,7 +93,7 @@ public:
     size_.assign(parent_.size(), 0);
     for (std::size_t index = 0; index < parent_.size(); ++index) {
       const auto root = find_vertex(mst::core::make_vertex_id(static_cast<int>(index)));
-      ++size_[static_cast<std::size_t>(mst::core::as_index(root))];
+      ++size_[root.index()];
     }
   }
 
@@ -110,8 +103,7 @@ public:
 
 private:
   mst::core::vertex_id find_vertex(mst::core::vertex_id vertex) {
-    auto &parent =
-        parent_[static_cast<std::size_t>(mst::core::as_index(vertex))];
+    auto &parent = parent_[vertex.index()];
     if (parent != vertex) {
       parent = find_vertex(parent);
     }

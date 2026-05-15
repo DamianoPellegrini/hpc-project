@@ -91,7 +91,7 @@ int main() {
   if (graph.edges().size() != 29) {
     return 1;
   }
-  if (!current || as_value(current->value.weight) != 1) {
+  if (!current || current->value.weight.value() != 1) {
     return 1;
   }
 
@@ -112,5 +112,23 @@ int main() {
   }
 
   static_assert(!std::is_same_v<raw_graph, validated_graph>);
+  static_assert(std::is_constructible_v<int, vertex_id>);
+  static_assert(std::is_constructible_v<std::size_t, vertex_id>);
+  static_assert(make_vertex_id(3).index() == std::size_t{3});
+  static_assert(make_vertex_id(3).value() == 3);
+  static_assert(!requires(vertex_id id) { id.value; });
+  static_assert(!std::is_convertible_v<vertex_id, int>);
+  static_assert(!std::is_convertible_v<vertex_id, std::size_t>);
+  static_assert(std::is_constructible_v<int, component_id>);
+  static_assert(std::is_constructible_v<std::size_t, component_id>);
+  static_assert(make_component_id(4).index() == std::size_t{4});
+  static_assert(make_component_id(4).value() == 4);
+  static_assert(!requires(component_id id) { id.value; });
+  static_assert(!std::is_convertible_v<component_id, int>);
+  static_assert(!std::is_convertible_v<component_id, std::size_t>);
+  static_assert(std::is_constructible_v<int, edge_weight>);
+  static_assert(make_edge_weight(5).value() == 5);
+  static_assert(!requires(edge_weight weight) { weight.value; });
+  static_assert(!std::is_convertible_v<edge_weight, int>);
   return 0;
 }

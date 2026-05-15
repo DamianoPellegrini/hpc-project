@@ -8,14 +8,38 @@ namespace mst::core {
 
 /// Vertex identifier inside a validated graph.
 struct vertex_id {
-  int value;
+  constexpr vertex_id() noexcept = default;
+  explicit constexpr vertex_id(int raw_value) noexcept : value_(raw_value) {}
+
+  constexpr std::size_t index() const noexcept {
+    return static_cast<std::size_t>(value_);
+  }
+  constexpr int value() const noexcept { return value_; }
+
+  explicit constexpr operator int() const noexcept { return value(); }
+  explicit constexpr operator std::size_t() const noexcept { return index(); }
+
+private:
+  int value_ = 0;
 
   friend constexpr auto operator<=>(vertex_id, vertex_id) = default;
 };
 
 /// Component identifier derived from a DSU root.
 struct component_id {
-  int value;
+  constexpr component_id() noexcept = default;
+  explicit constexpr component_id(int raw_value) noexcept : value_(raw_value) {}
+
+  constexpr std::size_t index() const noexcept {
+    return static_cast<std::size_t>(value_);
+  }
+  constexpr int value() const noexcept { return value_; }
+
+  explicit constexpr operator int() const noexcept { return value(); }
+  explicit constexpr operator std::size_t() const noexcept { return index(); }
+
+private:
+  int value_ = 0;
 
   friend constexpr auto operator<=>(component_id, component_id) = default;
 };
@@ -50,7 +74,15 @@ struct round_index {
 
 /// Edge weight used by all backends.
 struct edge_weight {
-  int value;
+  constexpr edge_weight() noexcept = default;
+  explicit constexpr edge_weight(int raw_value) noexcept : value_(raw_value) {}
+
+  constexpr int value() const noexcept { return value_; }
+
+  explicit constexpr operator int() const noexcept { return value(); }
+
+private:
+  int value_ = 0;
 
   friend constexpr auto operator<=>(edge_weight, edge_weight) = default;
 };
@@ -75,9 +107,5 @@ inline constexpr edge_weight infinite_weight{std::numeric_limits<int>::max()};
 constexpr vertex_id make_vertex_id(int value) noexcept { return vertex_id{value}; }
 constexpr component_id make_component_id(int value) noexcept { return component_id{value}; }
 constexpr edge_weight make_edge_weight(int value) noexcept { return edge_weight{value}; }
-
-constexpr int as_index(vertex_id id) noexcept { return id.value; }
-constexpr int as_index(component_id id) noexcept { return id.value; }
-constexpr int as_value(edge_weight weight) noexcept { return weight.value; }
 
 } // namespace mst::core

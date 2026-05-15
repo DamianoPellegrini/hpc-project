@@ -27,7 +27,7 @@ std::vector<int> pack_snapshot(const mst::dsu::parent_snapshot &snapshot) {
   std::vector<int> packed;
   packed.reserve(snapshot.parent().size());
   for (const mst::core::vertex_id vertex : snapshot.parent()) {
-    packed.push_back(mst::core::as_index(vertex));
+    packed.push_back(vertex.value());
   }
   return packed;
 }
@@ -57,10 +57,8 @@ local_best_candidates(const mst::core::validated_graph &graph,
       continue;
     }
 
-    mst::core::consider_candidate(
-        best[static_cast<std::size_t>(mst::core::as_index(left_root))], edge);
-    mst::core::consider_candidate(
-        best[static_cast<std::size_t>(mst::core::as_index(right_root))], edge);
+    mst::core::consider_candidate(best[left_root.index()], edge);
+    mst::core::consider_candidate(best[right_root.index()], edge);
   }
 
   return best;
@@ -91,7 +89,7 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
               MPI_Comm comm,
               mst::execution::mpi_round<mst::execution::local_minima_computed>) {
   std::vector<int> local_weights(static_cast<std::size_t>(vertex_count),
-                                 mst::core::as_value(mst::core::infinite_weight));
+                                 mst::core::infinite_weight.value());
   std::vector<int> local_u(static_cast<std::size_t>(vertex_count), -1);
   std::vector<int> local_v(static_cast<std::size_t>(vertex_count), -1);
   for (int component = 0; component < vertex_count; ++component) {
@@ -100,11 +98,11 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
       continue;
     }
     local_weights[static_cast<std::size_t>(component)] =
-        mst::core::as_value(candidate->value.weight);
+        candidate->value.weight.value();
     local_u[static_cast<std::size_t>(component)] =
-        mst::core::as_index(candidate->value.u);
+        candidate->value.u.value();
     local_v[static_cast<std::size_t>(component)] =
-        mst::core::as_index(candidate->value.v);
+        candidate->value.v.value();
   }
 
   std::vector<int> gathered_weights;
@@ -135,7 +133,7 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
     for (int component = 0; component < vertex_count; ++component) {
       const int weight =
           gathered_weights[static_cast<std::size_t>(offset + component)];
-      if (weight == mst::core::as_value(mst::core::infinite_weight)) {
+      if (weight == mst::core::infinite_weight.value()) {
         continue;
       }
       const mst::core::candidate_edge candidate{
@@ -167,7 +165,7 @@ bool apply_contractions(
     }
     if (auto admitted = dsu.unite(*candidate)) {
       mst_edges.push_back(*admitted);
-      total_weight += mst::core::as_value(admitted->value.weight);
+      total_weight += admitted->value.weight.value();
       changed = true;
     }
   }
