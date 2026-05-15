@@ -22,7 +22,14 @@ struct vertex_id {
 private:
   int value_ = 0;
 
-  friend constexpr auto operator<=>(vertex_id, vertex_id) = default;
+  friend constexpr bool operator==(vertex_id lhs, vertex_id rhs) noexcept {
+    return lhs.value_ == rhs.value_;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(vertex_id lhs, vertex_id rhs) noexcept {
+    return lhs.value_ <=> rhs.value_;
+  }
 };
 
 /// Component identifier derived from a DSU root.
@@ -41,35 +48,72 @@ struct component_id {
 private:
   int value_ = 0;
 
-  friend constexpr auto operator<=>(component_id, component_id) = default;
+  friend constexpr bool operator==(component_id lhs,
+                                   component_id rhs) noexcept {
+    return lhs.value_ == rhs.value_;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(component_id lhs, component_id rhs) noexcept {
+    return lhs.value_ <=> rhs.value_;
+  }
 };
 
 /// MPI rank identifier for distributed partition ownership.
 struct rank_id {
   int value;
 
-  friend constexpr auto operator<=>(rank_id, rank_id) = default;
+  friend constexpr bool operator==(rank_id lhs, rank_id rhs) noexcept {
+    return lhs.value == rhs.value;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(rank_id lhs, rank_id rhs) noexcept {
+    return lhs.value <=> rhs.value;
+  }
 };
 
 /// Stable index into an edge collection.
 struct edge_index {
   std::size_t value;
 
-  friend constexpr auto operator<=>(edge_index, edge_index) = default;
+  friend constexpr bool operator==(edge_index lhs, edge_index rhs) noexcept {
+    return lhs.value == rhs.value;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(edge_index lhs, edge_index rhs) noexcept {
+    return lhs.value <=> rhs.value;
+  }
 };
 
 /// Logical partition identifier for backend-owned slices.
 struct partition_id {
   int value;
 
-  friend constexpr auto operator<=>(partition_id, partition_id) = default;
+  friend constexpr bool operator==(partition_id lhs,
+                                   partition_id rhs) noexcept {
+    return lhs.value == rhs.value;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(partition_id lhs, partition_id rhs) noexcept {
+    return lhs.value <=> rhs.value;
+  }
 };
 
 /// Boruvka round counter.
 struct round_index {
   int value;
 
-  friend constexpr auto operator<=>(round_index, round_index) = default;
+  friend constexpr bool operator==(round_index lhs, round_index rhs) noexcept {
+    return lhs.value == rhs.value;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(round_index lhs, round_index rhs) noexcept {
+    return lhs.value <=> rhs.value;
+  }
 };
 
 /// Edge weight used by all backends.
@@ -84,7 +128,14 @@ struct edge_weight {
 private:
   int value_ = 0;
 
-  friend constexpr auto operator<=>(edge_weight, edge_weight) = default;
+  friend constexpr bool operator==(edge_weight lhs, edge_weight rhs) noexcept {
+    return lhs.value_ == rhs.value_;
+  }
+
+  friend constexpr std::strong_ordering
+  operator<=>(edge_weight lhs, edge_weight rhs) noexcept {
+    return lhs.value_ <=> rhs.value_;
+  }
 };
 
 /// Graph state before input validation.

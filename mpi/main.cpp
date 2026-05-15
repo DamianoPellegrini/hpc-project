@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 #include "mst/core/edge.hpp"
@@ -9,6 +10,7 @@
 #include "mst/core/summary.hpp"
 #include "mst/dsu/disjoint_set.hpp"
 #include "mst/execution/domain.hpp"
+#include "mst/reporting/json_report.hpp"
 #include "mst/visualization/render_graph.hpp"
 
 namespace mst::backend::mpi {
@@ -190,6 +192,10 @@ int main(std::int32_t argc, char **argv) {
       graph.vertex_count());
   std::vector<mst::core::mst_edge> mst_edges;
   int total_weight = 0;
+  int rounds = 0;
+  double local_compute_seconds = 0.0;
+  const double total_start = MPI_Wtime();
+  const double mst_start = MPI_Wtime();
 
   while (true) {
     const auto broadcast_phase = broadcast_parents(dsu, root_rank, MPI_COMM_WORLD);
@@ -197,11 +203,14 @@ int main(std::int32_t argc, char **argv) {
       break;
     }
 
+    ++rounds;
     const int begin =
         edge_begin_for_rank(static_cast<int>(graph.edges().size()), rank, size);
     const int end =
         edge_end_for_rank(static_cast<int>(graph.edges().size()), rank, size);
+    const double local_compute_start = MPI_Wtime();
     const auto local = compute_local_minima(graph, dsu, begin, end, broadcast_phase);
+    local_compute_seconds += MPI_Wtime() - local_compute_start;
     const auto reduced = reduce_minima(
         local, rank, size, graph.vertex_count(), root_rank, MPI_COMM_WORLD, {});
 
@@ -215,11 +224,61 @@ int main(std::int32_t argc, char **argv) {
       break;
     }
   }
+  const double mst_end = MPI_Wtime();
+  const double total_end = MPI_Wtime();
+
+  double max_local_compute_seconds = 0.0;
+  double avg_local_compute_seconds = 0.0;
+  MPI_Reduce(&local_compute_seconds, &max_local_compute_seconds, 1, MPI_DOUBLE,
+             MPI_MAX, root_rank, MPI_COMM_WORLD);
+  MPI_Reduce(&local_compute_seconds, &avg_local_compute_seconds, 1, MPI_DOUBLE,
+             MPI_SUM, root_rank, MPI_COMM_WORLD);
+
+  int version = 0;
+  int subversion = 0;
+  MPI_Get_version(&version, &subversion);
+
+  char processor_name[MPI_MAX_PROCESSOR_NAME];
+  int processor_name_length = 0;
+  MPI_Get_processor_name(processor_name, &processor_name_length);
 
   if (rank == root_rank) {
     std::cout << "MPI Boruvka MST\n";
     std::cout << mst::core::mst_summary(mst_edges, total_weight);
     mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
+
+    avg_local_compute_seconds /= static_cast<double>(size);
+
+    std::ostringstream report;
+    report << "{\n";
+    report << mst::reporting::common_metadata_json("mpi", true) << ",\n";
+    report << "  \"timings\": {\n";
+    report << "    \"total_seconds\": " << (total_end - total_start) << ",\n";
+    report << "    \"mst_loop_seconds\": " << (mst_end - mst_start) << ",\n";
+    report << "    \"max_local_compute_seconds\": "
+           << max_local_compute_seconds << ",\n";
+    report << "    \"avg_local_compute_seconds\": "
+           << avg_local_compute_seconds << "\n";
+    report << "  },\n";
+    report << "  \"capabilities\": {\n";
+    report << "    \"world_size\": " << size << ",\n";
+    report << "    \"mpi_version_major\": " << version << ",\n";
+    report << "    \"mpi_version_minor\": " << subversion << ",\n";
+    report << "    \"processor_name\": \""
+           << mst::reporting::json_escape(
+                  std::string(processor_name,
+                              static_cast<std::size_t>(processor_name_length)))
+           << "\"\n";
+    report << "  },\n";
+    report << "  \"mst\": {\n";
+    report << "    \"vertex_count\": " << graph.vertex_count() << ",\n";
+    report << "    \"input_edge_count\": " << graph.edges().size() << ",\n";
+    report << "    \"selected_edge_count\": " << mst_edges.size() << ",\n";
+    report << "    \"rounds\": " << rounds << ",\n";
+    report << "    \"total_weight\": " << total_weight << "\n";
+    report << "  }\n";
+    report << "}\n";
+    mst::reporting::write_report_from_env(report.str());
   }
 
   MPI_Finalize();

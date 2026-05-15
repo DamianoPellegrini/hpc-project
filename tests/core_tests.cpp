@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -7,9 +9,13 @@
 #include "mst/core/edge.hpp"
 #include "mst/core/graph.hpp"
 #include "mst/dsu/disjoint_set.hpp"
+#include "mst/reporting/json_report.hpp"
 #include "mst/visualization/render_graph.hpp"
 
 namespace {
+
+template <class value_t>
+concept has_public_value_member = requires(value_t value) { value.value; };
 
 std::string strip_ansi(std::string_view text) {
   std::string stripped;
@@ -68,6 +74,28 @@ bool node_labels_render_above_edge_weights() {
   return rendered[row_start + 5] == '2';
 }
 
+bool json_report_escapes_and_writes_file() {
+  using namespace mst::reporting;
+
+  const std::string escaped = json_escape("quote \" slash \\ newline\n");
+  if (escaped != "quote \\\" slash \\\\ newline\\n") {
+    return false;
+  }
+
+  const std::filesystem::path report_path =
+      std::filesystem::temp_directory_path() / "mst-json-report-test.json";
+  const bool wrote = write_report(report_path, "{\"ok\":true}\n");
+  if (!wrote) {
+    return false;
+  }
+
+  std::ifstream report_stream(report_path);
+  std::stringstream buffer;
+  buffer << report_stream.rdbuf();
+  std::filesystem::remove(report_path);
+  return buffer.str() == "{\"ok\":true}\n";
+}
+
 } // namespace
 
 int main() {
@@ -110,25 +138,28 @@ int main() {
   if (!node_labels_render_above_edge_weights()) {
     return 1;
   }
+  if (!json_report_escapes_and_writes_file()) {
+    return 1;
+  }
 
   static_assert(!std::is_same_v<raw_graph, validated_graph>);
   static_assert(std::is_constructible_v<int, vertex_id>);
   static_assert(std::is_constructible_v<std::size_t, vertex_id>);
   static_assert(make_vertex_id(3).index() == std::size_t{3});
   static_assert(make_vertex_id(3).value() == 3);
-  static_assert(!requires(vertex_id id) { id.value; });
+  static_assert(!has_public_value_member<vertex_id>);
   static_assert(!std::is_convertible_v<vertex_id, int>);
   static_assert(!std::is_convertible_v<vertex_id, std::size_t>);
   static_assert(std::is_constructible_v<int, component_id>);
   static_assert(std::is_constructible_v<std::size_t, component_id>);
   static_assert(make_component_id(4).index() == std::size_t{4});
   static_assert(make_component_id(4).value() == 4);
-  static_assert(!requires(component_id id) { id.value; });
+  static_assert(!has_public_value_member<component_id>);
   static_assert(!std::is_convertible_v<component_id, int>);
   static_assert(!std::is_convertible_v<component_id, std::size_t>);
   static_assert(std::is_constructible_v<int, edge_weight>);
   static_assert(make_edge_weight(5).value() == 5);
-  static_assert(!requires(edge_weight weight) { weight.value; });
+  static_assert(!has_public_value_member<edge_weight>);
   static_assert(!std::is_convertible_v<edge_weight, int>);
   return 0;
 }

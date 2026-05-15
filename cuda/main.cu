@@ -1,9 +1,11 @@
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -13,6 +15,7 @@
 #include "mst/core/summary.hpp"
 #include "mst/dsu/disjoint_set.hpp"
 #include "mst/memory/buffer.hpp"
+#include "mst/reporting/json_report.hpp"
 #include "mst/visualization/render_graph.hpp"
 
 namespace mst::backend::cuda_backend {
@@ -23,6 +26,12 @@ struct device_edge {
   int u;
   int v;
   int weight;
+};
+
+struct scan_profile {
+  double host_to_device_seconds = 0.0;
+  double kernel_seconds = 0.0;
+  double device_to_host_seconds = 0.0;
 };
 
 constexpr std::uint64_t empty_candidate_key =
@@ -169,7 +178,10 @@ unpack_candidates(const std::vector<std::uint64_t> &packed) {
 
 std::vector<mst::core::maybe_candidate_edge>
 scan_candidates_on_device(const mst::core::validated_graph &graph,
-                          const mst::dsu::parent_snapshot &snapshot) {
+                          const mst::dsu::parent_snapshot &snapshot,
+                          scan_profile &profile) {
+  using clock = std::chrono::steady_clock;
+
   auto host_edges = make_device_edges(graph);
   const std::vector<int> host_parent = pack_snapshot(snapshot);
   std::vector<std::uint64_t> host_best(static_cast<std::size_t>(graph.vertex_count()),
@@ -179,6 +191,7 @@ scan_candidates_on_device(const mst::core::validated_graph &graph,
   device_allocation<int> device_parent(host_parent.size());
   device_allocation<std::uint64_t> device_best(host_best.size());
 
+  const auto h2d_start = clock::now();
   check_cuda(cudaMemcpy(device_edges.buffer().data(), host_edges.span().data(),
                         sizeof(device_edge) * host_edges.size(),
                         cudaMemcpyHostToDevice),
@@ -187,6 +200,8 @@ scan_candidates_on_device(const mst::core::validated_graph &graph,
                         sizeof(int) * host_parent.size(),
                         cudaMemcpyHostToDevice),
              "copying parent snapshot to device failed");
+  profile.host_to_device_seconds +=
+      std::chrono::duration<double>(clock::now() - h2d_start).count();
 
   const int block_size = 256;
   const int best_grid =
@@ -194,6 +209,7 @@ scan_candidates_on_device(const mst::core::validated_graph &graph,
   const int edge_grid =
       (static_cast<int>(graph.edges().size()) + block_size - 1) / block_size;
 
+  const auto kernel_start = clock::now();
   initialize_best_kernel<<<best_grid, block_size>>>(device_best.buffer().data(),
                                                     graph.vertex_count());
   check_cuda(cudaGetLastError(), "initializing best candidates failed");
@@ -203,11 +219,16 @@ scan_candidates_on_device(const mst::core::validated_graph &graph,
       device_parent.buffer().data(), device_best.buffer().data());
   check_cuda(cudaGetLastError(), "scanning edges on device failed");
   check_cuda(cudaDeviceSynchronize(), "synchronizing CUDA scan failed");
+  profile.kernel_seconds +=
+      std::chrono::duration<double>(clock::now() - kernel_start).count();
 
+  const auto d2h_start = clock::now();
   check_cuda(cudaMemcpy(host_best.data(), device_best.buffer().data(),
                         sizeof(std::uint64_t) * host_best.size(),
                         cudaMemcpyDeviceToHost),
              "copying candidate minima to host failed");
+  profile.device_to_host_seconds +=
+      std::chrono::duration<double>(clock::now() - d2h_start).count();
   return unpack_candidates(host_best);
 }
 
@@ -217,6 +238,9 @@ scan_candidates_on_device(const mst::core::validated_graph &graph,
 
 int main() {
   using namespace mst::backend::cuda_backend;
+  using clock = std::chrono::steady_clock;
+
+  const auto total_start = clock::now();
 
   const mst::core::validated_graph graph =
       mst::core::validate(mst::core::make_test_graph());
@@ -230,10 +254,14 @@ int main() {
       graph.vertex_count());
   std::vector<mst::core::mst_edge> mst_edges;
   int total_weight = 0;
+  int rounds = 0;
+  scan_profile profile;
 
+  const auto mst_start = clock::now();
   while (dsu.component_count() > 1) {
+    ++rounds;
     const mst::dsu::parent_snapshot snapshot = dsu.compressed_snapshot();
-    const auto best = scan_candidates_on_device(graph, snapshot);
+    const auto best = scan_candidates_on_device(graph, snapshot, profile);
 
     bool changed = false;
     for (const auto &candidate : best) {
@@ -251,9 +279,58 @@ int main() {
       break;
     }
   }
+  const auto mst_end = clock::now();
+  const auto total_end = clock::now();
 
   std::cout << "CUDA Boruvka MST\n";
   std::cout << mst::core::mst_summary(mst_edges, total_weight);
   mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
+
+  int device_count = 0;
+  int active_device = 0;
+  cudaDeviceProp properties{};
+  check_cuda(cudaGetDeviceCount(&device_count), "querying CUDA device count failed");
+  check_cuda(cudaGetDevice(&active_device), "querying active CUDA device failed");
+  check_cuda(cudaGetDeviceProperties(&properties, active_device),
+             "querying CUDA device properties failed");
+
+  std::ostringstream report;
+  report << "{\n";
+  report << mst::reporting::common_metadata_json("cuda", true) << ",\n";
+  report << "  \"timings\": {\n";
+  report << "    \"total_seconds\": "
+         << std::chrono::duration<double>(total_end - total_start).count()
+         << ",\n";
+  report << "    \"mst_loop_seconds\": "
+         << std::chrono::duration<double>(mst_end - mst_start).count() << ",\n";
+  report << "    \"host_to_device_seconds\": " << profile.host_to_device_seconds
+         << ",\n";
+  report << "    \"kernel_seconds\": " << profile.kernel_seconds << ",\n";
+  report << "    \"device_to_host_seconds\": " << profile.device_to_host_seconds
+         << "\n";
+  report << "  },\n";
+  report << "  \"capabilities\": {\n";
+  report << "    \"device_count\": " << device_count << ",\n";
+  report << "    \"active_device\": " << active_device << ",\n";
+  report << "    \"device_name\": \""
+         << mst::reporting::json_escape(properties.name) << "\",\n";
+  report << "    \"compute_capability_major\": " << properties.major << ",\n";
+  report << "    \"compute_capability_minor\": " << properties.minor << ",\n";
+  report << "    \"global_memory_bytes\": " << properties.totalGlobalMem << ",\n";
+  report << "    \"multiprocessor_count\": "
+         << properties.multiProcessorCount << ",\n";
+  report << "    \"max_threads_per_block\": "
+         << properties.maxThreadsPerBlock << ",\n";
+  report << "    \"warp_size\": " << properties.warpSize << "\n";
+  report << "  },\n";
+  report << "  \"mst\": {\n";
+  report << "    \"vertex_count\": " << graph.vertex_count() << ",\n";
+  report << "    \"input_edge_count\": " << graph.edges().size() << ",\n";
+  report << "    \"selected_edge_count\": " << mst_edges.size() << ",\n";
+  report << "    \"rounds\": " << rounds << ",\n";
+  report << "    \"total_weight\": " << total_weight << "\n";
+  report << "  }\n";
+  report << "}\n";
+  mst::reporting::write_report_from_env(report.str());
   return EXIT_SUCCESS;
 }
