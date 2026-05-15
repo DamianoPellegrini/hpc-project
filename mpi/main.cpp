@@ -4,15 +4,17 @@
 #include <iostream>
 #include <vector>
 
-#include "mst_common.hpp"
-#include "mst_visualization.hpp"
+#include "mst/core/edge.hpp"
+#include "mst/core/graph.hpp"
+#include "mst/core/summary.hpp"
+#include "mst/dsu/disjoint_set.hpp"
+#include "mst/execution/domain.hpp"
+#include "mst/visualization/render_graph.hpp"
 
-namespace {
+namespace mst::backend::mpi {
 
-constexpr int kRootRank = 0;
+constexpr int root_rank = 0;
 
-// Split the edge list evenly across ranks. For this tiny test graph the simple
-// block partition is enough and keeps the implementation easy to follow.
 int edge_begin_for_rank(int edge_count, int rank, int size) {
   return (edge_count * rank) / size;
 }
@@ -21,162 +23,205 @@ int edge_end_for_rank(int edge_count, int rank, int size) {
   return (edge_count * (rank + 1)) / size;
 }
 
-// Each rank scans only its local edge slice, but it still evaluates candidates
-// for every current component. The root rank later merges those local minima.
-std::vector<mst::Candidate> local_best_candidates(const mst::Graph &graph,
-                                                  mst::DisjointSet &dsu,
-                                                  int begin, int end) {
-  std::vector<mst::Candidate> best(graph.vertex_count,
-                                   mst::invalid_candidate());
+std::vector<int> pack_snapshot(const mst::dsu::parent_snapshot &snapshot) {
+  std::vector<int> packed;
+  packed.reserve(snapshot.parent().size());
+  for (const mst::core::vertex_id vertex : snapshot.parent()) {
+    packed.push_back(mst::core::as_index(vertex));
+  }
+  return packed;
+}
+
+mst::dsu::parent_snapshot unpack_snapshot(const std::vector<int> &packed) {
+  std::vector<mst::core::vertex_id> parent;
+  parent.reserve(packed.size());
+  for (const int value : packed) {
+    parent.push_back(mst::core::make_vertex_id(value));
+  }
+  return mst::dsu::parent_snapshot{std::move(parent)};
+}
+
+std::vector<mst::core::maybe_candidate_edge>
+local_best_candidates(const mst::core::validated_graph &graph,
+                      mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
+                      int begin, int end) {
+  std::vector<mst::core::maybe_candidate_edge> best(
+      static_cast<std::size_t>(graph.vertex_count()));
 
   for (int index = begin; index < end; ++index) {
-    const mst::Edge &edge = graph.edges[static_cast<std::size_t>(index)];
-    const mst::VertexId left_root = dsu.find(edge.u);
-    const mst::VertexId right_root = dsu.find(edge.v);
+    const mst::core::edge &edge =
+        graph.edges()[static_cast<std::size_t>(index)];
+    const mst::core::component_id left_root = dsu.find(edge.u);
+    const mst::core::component_id right_root = dsu.find(edge.v);
     if (left_root == right_root) {
       continue;
     }
 
-    mst::consider_candidate(
-        best[static_cast<std::size_t>(mst::index_of(left_root))], edge.u,
-        edge.v, edge.weight);
-    mst::consider_candidate(
-        best[static_cast<std::size_t>(mst::index_of(right_root))], edge.u,
-        edge.v, edge.weight);
+    mst::core::consider_candidate(
+        best[static_cast<std::size_t>(mst::core::as_index(left_root))], edge);
+    mst::core::consider_candidate(
+        best[static_cast<std::size_t>(mst::core::as_index(right_root))], edge);
   }
 
   return best;
 }
 
-} // namespace
+mst::execution::mpi_round<mst::execution::parents_broadcasted>
+broadcast_parents(
+    mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
+    int root_rank_value, MPI_Comm comm) {
+  std::vector<int> packed = pack_snapshot(dsu.compressed_snapshot());
+  MPI_Bcast(packed.data(), static_cast<int>(packed.size()), MPI_INT,
+            root_rank_value, comm);
+  dsu.set_parent_snapshot(unpack_snapshot(packed));
+  return {};
+}
 
-int main(int32_t argc, char **argv) {
+std::vector<mst::core::maybe_candidate_edge> compute_local_minima(
+    const mst::core::validated_graph &graph,
+    mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
+    int edge_begin, int edge_end,
+    mst::execution::mpi_round<mst::execution::parents_broadcasted>) {
+  return local_best_candidates(graph, dsu, edge_begin, edge_end);
+}
+
+std::vector<mst::core::maybe_candidate_edge>
+reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
+              int rank, int size, int vertex_count, int root_rank_value,
+              MPI_Comm comm,
+              mst::execution::mpi_round<mst::execution::local_minima_computed>) {
+  std::vector<int> local_weights(static_cast<std::size_t>(vertex_count),
+                                 mst::core::as_value(mst::core::infinite_weight));
+  std::vector<int> local_u(static_cast<std::size_t>(vertex_count), -1);
+  std::vector<int> local_v(static_cast<std::size_t>(vertex_count), -1);
+  for (int component = 0; component < vertex_count; ++component) {
+    const auto &candidate = local[static_cast<std::size_t>(component)];
+    if (!candidate) {
+      continue;
+    }
+    local_weights[static_cast<std::size_t>(component)] =
+        mst::core::as_value(candidate->value.weight);
+    local_u[static_cast<std::size_t>(component)] =
+        mst::core::as_index(candidate->value.u);
+    local_v[static_cast<std::size_t>(component)] =
+        mst::core::as_index(candidate->value.v);
+  }
+
+  std::vector<int> gathered_weights;
+  std::vector<int> gathered_u;
+  std::vector<int> gathered_v;
+  if (rank == root_rank_value) {
+    const auto gathered_size = static_cast<std::size_t>(size * vertex_count);
+    gathered_weights.resize(gathered_size);
+    gathered_u.resize(gathered_size);
+    gathered_v.resize(gathered_size);
+  }
+
+  MPI_Gather(local_weights.data(), vertex_count, MPI_INT, gathered_weights.data(),
+             vertex_count, MPI_INT, root_rank_value, comm);
+  MPI_Gather(local_u.data(), vertex_count, MPI_INT, gathered_u.data(),
+             vertex_count, MPI_INT, root_rank_value, comm);
+  MPI_Gather(local_v.data(), vertex_count, MPI_INT, gathered_v.data(),
+             vertex_count, MPI_INT, root_rank_value, comm);
+
+  std::vector<mst::core::maybe_candidate_edge> best;
+  if (rank != root_rank_value) {
+    return best;
+  }
+
+  best.resize(static_cast<std::size_t>(vertex_count));
+  for (int source_rank = 0; source_rank < size; ++source_rank) {
+    const int offset = source_rank * vertex_count;
+    for (int component = 0; component < vertex_count; ++component) {
+      const int weight =
+          gathered_weights[static_cast<std::size_t>(offset + component)];
+      if (weight == mst::core::as_value(mst::core::infinite_weight)) {
+        continue;
+      }
+      const mst::core::candidate_edge candidate{
+          mst::core::edge{
+              mst::core::make_vertex_id(
+                  gathered_u[static_cast<std::size_t>(offset + component)]),
+              mst::core::make_vertex_id(
+                  gathered_v[static_cast<std::size_t>(offset + component)]),
+              mst::core::make_edge_weight(weight)}};
+      const mst::core::maybe_candidate_edge next = candidate;
+      if (mst::core::better_candidate(
+              next, best[static_cast<std::size_t>(component)])) {
+        best[static_cast<std::size_t>(component)] = next;
+      }
+    }
+  }
+
+  return best;
+}
+
+bool apply_contractions(
+    const std::vector<mst::core::maybe_candidate_edge> &best,
+    mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
+    std::vector<mst::core::mst_edge> &mst_edges, int &total_weight) {
+  bool changed = false;
+  for (const auto &candidate : best) {
+    if (!candidate) {
+      continue;
+    }
+    if (auto admitted = dsu.unite(*candidate)) {
+      mst_edges.push_back(*admitted);
+      total_weight += mst::core::as_value(admitted->value.weight);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+} // namespace mst::backend::mpi
+
+int main(std::int32_t argc, char **argv) {
+  using namespace mst::backend::mpi;
+
   MPI_Init(&argc, &argv);
 
-  int32_t rank = 0;
-  int32_t size = 0;
+  int rank = 0;
+  int size = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  const mst::Graph graph = mst::make_test_graph();
-  mst::DisjointSet dsu(graph.vertex_count);
-  std::vector<mst::Edge> mst_edges;
+  const mst::core::validated_graph graph =
+      mst::core::validate(mst::core::make_test_graph());
+  mst::dsu::disjoint_set<mst::core::uncompressed_parents> dsu(
+      graph.vertex_count());
+  std::vector<mst::core::mst_edge> mst_edges;
   int total_weight = 0;
 
   while (true) {
-    // Rank 0 owns the authoritative forest. At the start of every round it
-    // broadcasts the current parent array so all ranks agree on the same
-    // component labels before scanning edges.
-    std::vector<int> parent = mst::pack_vertices(dsu.parent());
-    MPI_Bcast(parent.data(), static_cast<int>(parent.size()), MPI_INT,
-              kRootRank, MPI_COMM_WORLD);
-    dsu.set_parent(mst::unpack_vertices(parent));
-
-    const int component_count = dsu.component_count();
-    if (component_count <= 1) {
+    const auto broadcast_phase = broadcast_parents(dsu, root_rank, MPI_COMM_WORLD);
+    if (dsu.component_count() <= 1) {
       break;
     }
 
     const int begin =
-        edge_begin_for_rank(static_cast<int>(graph.edges.size()), rank, size);
+        edge_begin_for_rank(static_cast<int>(graph.edges().size()), rank, size);
     const int end =
-        edge_end_for_rank(static_cast<int>(graph.edges.size()), rank, size);
-    const std::vector<mst::Candidate> local =
-        local_best_candidates(graph, dsu, begin, end);
-
-    // Pack the local component minima into plain integer arrays so MPI_Gather
-    // can move them without any custom datatypes.
-    std::vector<int> local_weights(graph.vertex_count,
-                                   mst::value_of(mst::kInfiniteWeight));
-    std::vector<int> local_u(graph.vertex_count, -1);
-    std::vector<int> local_v(graph.vertex_count, -1);
-    for (size_t component = 0; component < graph.vertex_count; ++component) {
-      const mst::Candidate &candidate = local[component];
-      if (!candidate) {
-        continue;
-      }
-      local_weights[component] = mst::value_of(candidate->weight);
-      local_u[component] = mst::index_of(candidate->u);
-      local_v[component] = mst::index_of(candidate->v);
-    }
-
-    std::vector<int> gathered_weights;
-    std::vector<int> gathered_u;
-    std::vector<int> gathered_v;
-    if (rank == kRootRank) {
-      gathered_weights.resize(
-          static_cast<std::size_t>(size * graph.vertex_count));
-      gathered_u.resize(static_cast<std::size_t>(size * graph.vertex_count));
-      gathered_v.resize(static_cast<std::size_t>(size * graph.vertex_count));
-    }
-
-    MPI_Gather(local_weights.data(), graph.vertex_count, MPI_INT,
-               gathered_weights.data(), graph.vertex_count, MPI_INT, kRootRank,
-               MPI_COMM_WORLD);
-    MPI_Gather(local_u.data(), graph.vertex_count, MPI_INT, gathered_u.data(),
-               graph.vertex_count, MPI_INT, kRootRank, MPI_COMM_WORLD);
-    MPI_Gather(local_v.data(), graph.vertex_count, MPI_INT, gathered_v.data(),
-               graph.vertex_count, MPI_INT, kRootRank, MPI_COMM_WORLD);
+        edge_end_for_rank(static_cast<int>(graph.edges().size()), rank, size);
+    const auto local = compute_local_minima(graph, dsu, begin, end, broadcast_phase);
+    const auto reduced = reduce_minima(
+        local, rank, size, graph.vertex_count(), root_rank, MPI_COMM_WORLD, {});
 
     int continue_flag = 0;
-    if (rank == kRootRank) {
-      // Merge the per-rank minima into one candidate per component. The best
-      // edge for a component is the cheapest outgoing edge seen on any rank.
-      std::vector<mst::Candidate> best(graph.vertex_count,
-                                       mst::invalid_candidate());
-      for (int source_rank = 0; source_rank < size; ++source_rank) {
-        const int offset = source_rank * graph.vertex_count;
-        for (int component = 0; component < graph.vertex_count; ++component) {
-          const int weight =
-              gathered_weights[static_cast<std::size_t>(offset + component)];
-          if (weight == mst::value_of(mst::kInfiniteWeight)) {
-            continue;
-          }
-          const mst::Candidate next = mst::Edge{
-              mst::vertex_id(
-                  gathered_u[static_cast<std::size_t>(offset + component)]),
-              mst::vertex_id(
-                  gathered_v[static_cast<std::size_t>(offset + component)]),
-              mst::weight(weight)};
-          if (mst::better_candidate(
-                  next, best[static_cast<std::size_t>(component)])) {
-            best[static_cast<std::size_t>(component)] = next;
-          }
-        }
-      }
-
-      // Apply the chosen edges to the shared forest. Some candidates can become
-      // internal after earlier unions in the same round, so unite() filters
-      // them out safely.
-      bool changed = false;
-      for (size_t component = 0; component < graph.vertex_count; ++component) {
-        const mst::Candidate &candidate = best[component];
-        if (!candidate) {
-          continue;
-        }
-        if (dsu.unite(candidate->u, candidate->v)) {
-          mst_edges.push_back(*candidate);
-          total_weight += mst::value_of(candidate->weight);
-          changed = true;
-        }
-      }
-
-      // Broadcast the updated forest to the other ranks before the next round.
-      parent = mst::pack_vertices(dsu.parent());
-      dsu.set_parent(mst::unpack_vertices(parent));
-      continue_flag = changed ? 1 : 0;
+    if (rank == root_rank) {
+      continue_flag = apply_contractions(reduced, dsu, mst_edges, total_weight) ? 1 : 0;
     }
 
-    MPI_Bcast(&continue_flag, 1, MPI_INT, kRootRank, MPI_COMM_WORLD);
+    MPI_Bcast(&continue_flag, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
     if (continue_flag == 0) {
       break;
     }
   }
 
-  if (rank == kRootRank) {
+  if (rank == root_rank) {
     std::cout << "MPI Boruvka MST\n";
-    std::cout << mst::mst_summary(mst_edges, total_weight);
-    mst::viz::render_graph_with_mst(graph, mst_edges, total_weight);
+    std::cout << mst::core::mst_summary(mst_edges, total_weight);
+    mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
   }
 
   MPI_Finalize();

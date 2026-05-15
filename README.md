@@ -2,35 +2,48 @@
 
 This project aims to show the parallel implementation of the Boruvka's MST algorithm.
 
-The implementation is repeated 3 times using separate hpc paradigms:
+There are 3 separate implementations using these hpc backends:
 
 - MPI
 - OpenMP
 - CUDA
 
-To compile and run the code install the following dependencies and use the following commands:
+CMake auto-detects which backends can be built on the current machine.
 
-> [!WARNING]  
-> This will only work on MacOS
+> [!WARNING]
+> The current setup instructions are MacOS-oriented.
 
-Install:
+Install local CPU dependencies:
+
 ```bash
 brew install openmpi libomp
 ```
 
-Compile:
+Build everything available on this machine:
+
 ```bash
 cmake --preset ninja-local
 cmake --build --preset ninja-local
 ```
 
-Run:
+Run OpenMP:
+
 ```bash
-mpirun -np 2 ./build/mpi/mpi_app
-# or
-./build/mpi/mpi_app
-# and
 ./build/openmp/openmp_app
 ```
 
-or use the provided Zed tasks.
+Run MPI:
+
+```bash
+mpirun -np 2 ./build/mpi/mpi_app
+```
+
+Build & Run CUDA, on a CUDA machine:
+
+```bash
+cmake --preset ninja-local
+cmake --build --preset ninja-local --target cuda_app
+./build/cuda/cuda_app
+```
+
+Zed tasks already match this configuration.

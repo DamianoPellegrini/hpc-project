@@ -4,45 +4,51 @@
 #include <iostream>
 #include <vector>
 
-#include "mst_common.hpp"
-#include "mst_visualization.hpp"
+#include "mst/core/edge.hpp"
+#include "mst/core/graph.hpp"
+#include "mst/core/summary.hpp"
+#include "mst/dsu/disjoint_set.hpp"
+#include "mst/visualization/render_graph.hpp"
 
-namespace {
+namespace mst::backend::openmp {
 
-// OpenMP version of the same scan: each thread inspects a subset of the edges
-// and records the cheapest outgoing edge it saw for every component.
-std::vector<mst::Candidate> local_best_candidates(const mst::Graph &graph,
-                                                  mst::DisjointSet &dsu) {
-  // The DSU is shared between threads, so we take a snapshot of the parent
-  // array and perform read-only root lookups inside the parallel region.
-  const std::vector<mst::VertexId> parent_snapshot = dsu.parent();
-  std::vector<mst::Candidate> best(graph.vertex_count, mst::invalid_candidate());
+std::vector<mst::core::maybe_candidate_edge>
+local_best_candidates(const mst::core::validated_graph &graph,
+                      const mst::dsu::parent_snapshot &snapshot) {
+  std::vector<mst::core::maybe_candidate_edge> best(
+      static_cast<std::size_t>(graph.vertex_count()));
 
 #pragma omp parallel
   {
-    std::vector<mst::Candidate> local(graph.vertex_count, mst::invalid_candidate());
+    std::vector<mst::core::maybe_candidate_edge> local(
+        static_cast<std::size_t>(graph.vertex_count()));
 
 #pragma omp for nowait
-    for (std::size_t index = 0; index < graph.edges.size(); ++index) {
-      const mst::Edge &edge = graph.edges[index];
-      const mst::VertexId left_root = mst::find_root(parent_snapshot, edge.u);
-      const mst::VertexId right_root = mst::find_root(parent_snapshot, edge.v);
+    for (std::size_t index = 0; index < graph.edges().size(); ++index) {
+      const mst::core::edge &edge = graph.edges()[index];
+      const mst::core::vertex_id left_root =
+          mst::dsu::find_root(snapshot, edge.u);
+      const mst::core::vertex_id right_root =
+          mst::dsu::find_root(snapshot, edge.v);
       if (left_root == right_root) {
         continue;
       }
 
-      mst::consider_candidate(local[static_cast<std::size_t>(mst::index_of(left_root))], edge.u,
-                              edge.v, edge.weight);
-      mst::consider_candidate(local[static_cast<std::size_t>(mst::index_of(right_root))], edge.u,
-                              edge.v, edge.weight);
+      mst::core::consider_candidate(
+          local[static_cast<std::size_t>(mst::core::as_index(left_root))], edge);
+      mst::core::consider_candidate(
+          local[static_cast<std::size_t>(mst::core::as_index(right_root))], edge);
     }
 
 #pragma omp critical
     {
-      for (int component = 0; component < graph.vertex_count; ++component) {
-        if (mst::better_candidate(local[static_cast<std::size_t>(component)],
-                                  best[static_cast<std::size_t>(component)])) {
-          best[static_cast<std::size_t>(component)] = local[static_cast<std::size_t>(component)];
+      for (int component = 0; component < graph.vertex_count(); ++component) {
+        auto &global =
+            best[static_cast<std::size_t>(component)];
+        const auto &candidate =
+            local[static_cast<std::size_t>(component)];
+        if (mst::core::better_candidate(candidate, global)) {
+          global = candidate;
         }
       }
     }
@@ -51,27 +57,33 @@ std::vector<mst::Candidate> local_best_candidates(const mst::Graph &graph,
   return best;
 }
 
-} // namespace
+} // namespace mst::backend::openmp
 
 int main() {
-  const mst::Graph graph = mst::make_test_graph();
-  mst::DisjointSet dsu(graph.vertex_count);
-  std::vector<mst::Edge> mst_edges;
+  using namespace mst::backend::openmp;
+
+  const mst::core::validated_graph graph =
+      mst::core::validate(mst::core::make_test_graph());
+  mst::dsu::disjoint_set<mst::core::uncompressed_parents> dsu(
+      graph.vertex_count());
+  std::vector<mst::core::mst_edge> mst_edges;
   int total_weight = 0;
 
   while (dsu.component_count() > 1) {
-    // Each Boruvka round asks every component for its cheapest outgoing edge.
-    const std::vector<mst::Candidate> best = local_best_candidates(graph, dsu);
+    const mst::dsu::parent_snapshot snapshot = dsu.compressed_snapshot();
+    const std::vector<mst::core::maybe_candidate_edge> best =
+        local_best_candidates(graph, snapshot);
 
     bool changed = false;
-    for (int component = 0; component < graph.vertex_count; ++component) {
-      const mst::Candidate &candidate = best[static_cast<std::size_t>(component)];
+    for (int component = 0; component < graph.vertex_count(); ++component) {
+      const auto &candidate = best[static_cast<std::size_t>(component)];
       if (!candidate) {
         continue;
       }
-      if (dsu.unite(candidate->u, candidate->v)) {
-        mst_edges.push_back(*candidate);
-        total_weight += mst::value_of(candidate->weight);
+
+      if (auto admitted = dsu.unite(*candidate)) {
+        total_weight += mst::core::as_value(admitted->value.weight);
+        mst_edges.push_back(*admitted);
         changed = true;
       }
     }
@@ -81,8 +93,9 @@ int main() {
     }
   }
 
-  std::cout << "OpenMP Boruvka MST using " << omp_get_max_threads() << " threads\n";
-  std::cout << mst::mst_summary(mst_edges, total_weight);
-  mst::viz::render_graph_with_mst(graph, mst_edges, total_weight);
+  std::cout << "OpenMP Boruvka MST using " << omp_get_max_threads()
+            << " threads\n";
+  std::cout << mst::core::mst_summary(mst_edges, total_weight);
+  mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
   return 0;
 }
