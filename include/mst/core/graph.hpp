@@ -8,8 +8,7 @@
 
 namespace mst::core {
 
-template <class state_t>
-class graph {
+template <class state_t> class graph {
 public:
   /// Construct a graph in the given typestate.
   graph(int vertex_count, std::vector<edge> edges)

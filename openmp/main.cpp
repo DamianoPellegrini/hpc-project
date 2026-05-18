@@ -44,10 +44,8 @@ local_best_candidates(const mst::core::validated_graph &graph,
 #pragma omp critical
     {
       for (int component = 0; component < graph.vertex_count(); ++component) {
-        auto &global =
-            best[static_cast<std::size_t>(component)];
-        const auto &candidate =
-            local[static_cast<std::size_t>(component)];
+        auto &global = best[static_cast<std::size_t>(component)];
+        const auto &candidate = local[static_cast<std::size_t>(component)];
         if (mst::core::better_candidate(candidate, global)) {
           global = candidate;
         }
@@ -124,7 +122,8 @@ int main() {
   report << "    \"num_procs\": " << omp_get_num_procs() << ",\n";
   report << "    \"dynamic_enabled\": "
          << (omp_get_dynamic() ? "true" : "false") << ",\n";
-  report << "    \"max_active_levels\": " << omp_get_max_active_levels() << "\n";
+  report << "    \"max_active_levels\": " << omp_get_max_active_levels()
+         << "\n";
   report << "  },\n";
   report << "  \"mst\": {\n";
   report << "    \"vertex_count\": " << graph.vertex_count() << ",\n";

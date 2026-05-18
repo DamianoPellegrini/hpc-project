@@ -64,8 +64,8 @@ public:
   int width() const noexcept { return width_; }
   int height() const noexcept { return height_; }
 
-  void set(int x, int y, std::string_view text = " ",
-           const char *color = white, bool is_bold = false) {
+  void set(int x, int y, std::string_view text = " ", const char *color = white,
+           bool is_bold = false) {
     if (x < 0 || y < 0 || x >= width_ || y >= height_) {
       return;
     }
@@ -76,8 +76,7 @@ public:
     target.is_bold = is_bold;
   }
 
-  void set(int x, int y, char ch, const char *color,
-           bool is_bold = false) {
+  void set(int x, int y, char ch, const char *color, bool is_bold = false) {
     set(x, y, std::string_view(&ch, 1), color, is_bold);
   }
 
@@ -98,8 +97,7 @@ public:
   }
 
   void draw_line(int x0, int y0, int x1, int y1, std::string_view text,
-                 const char *color,
-                 bool is_bold = false) {
+                 const char *color, bool is_bold = false) {
     const int dx = std::abs(x1 - x0);
     const int sx = x0 < x1 ? 1 : -1;
     const int dy = -std::abs(y1 - y0);
@@ -186,7 +184,8 @@ make_force_layout(const mst::core::validated_graph &graph) {
   }
 
   const double area = 4.0;
-  const double ideal_length = std::sqrt(area / static_cast<double>(vertex_count));
+  const double ideal_length =
+      std::sqrt(area / static_cast<double>(vertex_count));
   double temperature = 0.18;
   constexpr int iteration_count = 180;
 
@@ -241,8 +240,7 @@ make_force_layout(const mst::core::validated_graph &graph) {
     for (int vertex = 0; vertex < vertex_count; ++vertex) {
       point &position = positions[static_cast<std::size_t>(vertex)];
       const point delta = displacement[static_cast<std::size_t>(vertex)];
-      const double length =
-          std::sqrt(delta.x * delta.x + delta.y * delta.y);
+      const double length = std::sqrt(delta.x * delta.x + delta.y * delta.y);
       if (length > 1e-9) {
         const double step = std::min(length, temperature);
         position.x += (delta.x / length) * step;
@@ -284,8 +282,7 @@ project_layout(const std::vector<point> &layout, int width, int height) {
     const double normalized_x = (value.x - min_x) / span_x;
     const double normalized_y = (value.y - min_y) / span_y;
     projected.push_back(canvas_point{
-        margin_x +
-            static_cast<int>(std::round(normalized_x * drawable_width)),
+        margin_x + static_cast<int>(std::round(normalized_x * drawable_width)),
         margin_y +
             static_cast<int>(std::round(normalized_y * drawable_height))});
   }
@@ -302,11 +299,7 @@ inline std::string node_label(int vertex) { return std::to_string(vertex); }
 
 inline const char *non_mst_edge_color(const mst::core::edge &edge_value) {
   constexpr const char *palette[] = {
-      muted_gray,
-      muted_blue,
-      muted_teal,
-      muted_violet,
-      muted_sand,
+      muted_gray, muted_blue, muted_teal, muted_violet, muted_sand,
   };
   const auto endpoints = mst::core::normalized_endpoints(edge_value);
   const std::size_t palette_index =
@@ -317,18 +310,17 @@ inline const char *non_mst_edge_color(const mst::core::edge &edge_value) {
 
 inline bool is_mst_edge(const mst::core::edge &edge_value,
                         const std::vector<mst::core::mst_edge> &mst_edges) {
-  return std::any_of(
-      mst_edges.begin(), mst_edges.end(),
-      [&](const mst::core::mst_edge &mst_edge_value) {
-        return same_undirected_edge(edge_value, mst_edge_value.value);
-      });
+  return std::any_of(mst_edges.begin(), mst_edges.end(),
+                     [&](const mst::core::mst_edge &mst_edge_value) {
+                       return same_undirected_edge(edge_value,
+                                                   mst_edge_value.value);
+                     });
 }
 
 inline void draw_padded_text(canvas &target, int center_x, int center_y,
                              std::string_view text, int horizontal_padding,
                              const char *color, bool is_bold) {
-  const int width =
-      static_cast<int>(text.size()) + (2 * horizontal_padding);
+  const int width = static_cast<int>(text.size()) + (2 * horizontal_padding);
   const int start_x = center_x - (width / 2);
   target.fill_rect(start_x, center_y, width, 1, ' ');
   target.draw_text(start_x + horizontal_padding, center_y, std::string{text},
@@ -384,14 +376,12 @@ inline void draw_graph_edges(canvas &target,
       continue;
     }
 
-    const canvas_point &from =
-        points[edge_value.u.index()];
-    const canvas_point &to =
-        points[edge_value.v.index()];
+    const canvas_point &from = points[edge_value.u.index()];
+    const canvas_point &to = points[edge_value.v.index()];
     const char *edge_color =
         mst_edge ? mst_green : non_mst_edge_color(edge_value);
-    target.draw_line(from.x, from.y, to.x, to.y, edge_glyph,
-                     edge_color, mst_edge);
+    target.draw_line(from.x, from.y, to.x, to.y, edge_glyph, edge_color,
+                     mst_edge);
   }
 }
 
@@ -405,15 +395,13 @@ inline void draw_graph_vertices(canvas &target,
   }
 }
 
-inline void draw_graph_weights(canvas &target,
-                               const mst::core::validated_graph &graph,
-                               const std::vector<canvas_point> &points,
-                               const std::vector<mst::core::mst_edge> &mst_edges) {
+inline void
+draw_graph_weights(canvas &target, const mst::core::validated_graph &graph,
+                   const std::vector<canvas_point> &points,
+                   const std::vector<mst::core::mst_edge> &mst_edges) {
   for (const mst::core::edge &edge_value : graph.edges()) {
-    const canvas_point &from =
-        points[edge_value.u.index()];
-    const canvas_point &to =
-        points[edge_value.v.index()];
+    const canvas_point &from = points[edge_value.u.index()];
+    const canvas_point &to = points[edge_value.v.index()];
     const bool mst_edge = is_mst_edge(edge_value, mst_edges);
     const char *edge_color =
         mst_edge ? mst_green : non_mst_edge_color(edge_value);
@@ -422,10 +410,10 @@ inline void draw_graph_weights(canvas &target,
   }
 }
 
-inline void draw_graph_content(
-    canvas &target, const mst::core::validated_graph &graph,
-    const std::vector<canvas_point> &points,
-    const std::vector<mst::core::mst_edge> &mst_edges) {
+inline void
+draw_graph_content(canvas &target, const mst::core::validated_graph &graph,
+                   const std::vector<canvas_point> &points,
+                   const std::vector<mst::core::mst_edge> &mst_edges) {
   draw_graph_edges(target, graph, points, mst_edges, false);
   draw_graph_edges(target, graph, points, mst_edges, true);
   draw_graph_weights(target, graph, points, mst_edges);
@@ -436,10 +424,10 @@ inline void clear_terminal(std::ostream &out) {
   out << clear_screen << cursor_home;
 }
 
-inline void render_graph_with_mst(const mst::core::validated_graph &graph,
-                                  const std::vector<mst::core::mst_edge> &mst_edges,
-                                  int total_weight,
-                                  std::ostream &out = std::cout) {
+inline void
+render_graph_with_mst(const mst::core::validated_graph &graph,
+                      const std::vector<mst::core::mst_edge> &mst_edges,
+                      int total_weight, std::ostream &out = std::cout) {
   const viewport_size terminal = detect_viewport_size();
   const int width = std::clamp(terminal.width - 2, 96, 180);
   const int height = std::clamp(terminal.height - 8, 28, 60);
@@ -450,11 +438,10 @@ inline void render_graph_with_mst(const mst::core::validated_graph &graph,
 
   clear_terminal(out);
   out << "Graph overlay with MST highlighted\n";
-  out << "Legend: " << muted_blue << edge_glyph << " non-MST edges"
-      << reset << ", " << mst_green << bold << edge_glyph << " MST edges"
-      << reset << ", " << yellow << bold << "padded labels" << reset << ", "
-      << muted_gray << "edge weights" << reset
-      << '\n';
+  out << "Legend: " << muted_blue << edge_glyph << " non-MST edges" << reset
+      << ", " << mst_green << bold << edge_glyph << " MST edges" << reset
+      << ", " << yellow << bold << "padded labels" << reset << ", "
+      << muted_gray << "edge weights" << reset << '\n';
   out << "MST weight = " << total_weight << ", edges = " << mst_edges.size()
       << "\n\n";
 

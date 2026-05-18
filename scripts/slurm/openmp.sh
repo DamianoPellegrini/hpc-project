@@ -27,7 +27,7 @@ module purge
 module load amd/gcc/gcc-12
 
 cd "$REPO_DIR"
-make openmp CXX=g++
+make USE_CMAKE=OFF openmp CXX=g++
 
 ./build/openmp/openmp_app
 

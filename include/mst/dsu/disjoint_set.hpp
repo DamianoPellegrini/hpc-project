@@ -34,18 +34,17 @@ inline mst::core::vertex_id find_root(const parent_snapshot &snapshot,
   return current;
 }
 
-template <class compression_state_t>
-class disjoint_set;
+template <class compression_state_t> class disjoint_set;
 
-template <>
-class disjoint_set<mst::core::uncompressed_parents> {
+template <> class disjoint_set<mst::core::uncompressed_parents> {
 public:
   /// Create a DSU with one singleton component per vertex.
   explicit disjoint_set(int vertex_count)
       : parent_(static_cast<std::size_t>(vertex_count)),
         size_(static_cast<std::size_t>(vertex_count), 1) {
     for (int index = 0; index < vertex_count; ++index) {
-      parent_[static_cast<std::size_t>(index)] = mst::core::make_vertex_id(index);
+      parent_[static_cast<std::size_t>(index)] =
+          mst::core::make_vertex_id(index);
     }
   }
 
@@ -53,7 +52,8 @@ public:
     return mst::core::make_component_id(find_vertex(vertex).value());
   }
 
-  std::optional<mst::core::mst_edge> unite(mst::core::candidate_edge candidate) {
+  std::optional<mst::core::mst_edge>
+  unite(mst::core::candidate_edge candidate) {
     mst::core::vertex_id left = find_vertex(candidate.value.u);
     mst::core::vertex_id right = find_vertex(candidate.value.v);
     if (left == right) {
@@ -92,7 +92,8 @@ public:
     parent_ = snapshot.parent();
     size_.assign(parent_.size(), 0);
     for (std::size_t index = 0; index < parent_.size(); ++index) {
-      const auto root = find_vertex(mst::core::make_vertex_id(static_cast<int>(index)));
+      const auto root =
+          find_vertex(mst::core::make_vertex_id(static_cast<int>(index)));
       ++size_[root.index()];
     }
   }

@@ -43,10 +43,10 @@ mst::dsu::parent_snapshot unpack_snapshot(const std::vector<int> &packed) {
   return mst::dsu::parent_snapshot{std::move(parent)};
 }
 
-std::vector<mst::core::maybe_candidate_edge>
-local_best_candidates(const mst::core::validated_graph &graph,
-                      mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
-                      int begin, int end) {
+std::vector<mst::core::maybe_candidate_edge> local_best_candidates(
+    const mst::core::validated_graph &graph,
+    mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu, int begin,
+    int end) {
   std::vector<mst::core::maybe_candidate_edge> best(
       static_cast<std::size_t>(graph.vertex_count()));
 
@@ -67,9 +67,8 @@ local_best_candidates(const mst::core::validated_graph &graph,
 }
 
 mst::execution::mpi_round<mst::execution::parents_broadcasted>
-broadcast_parents(
-    mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
-    int root_rank_value, MPI_Comm comm) {
+broadcast_parents(mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
+                  int root_rank_value, MPI_Comm comm) {
   std::vector<int> packed = pack_snapshot(dsu.compressed_snapshot());
   MPI_Bcast(packed.data(), static_cast<int>(packed.size()), MPI_INT,
             root_rank_value, comm);
@@ -85,11 +84,10 @@ std::vector<mst::core::maybe_candidate_edge> compute_local_minima(
   return local_best_candidates(graph, dsu, edge_begin, edge_end);
 }
 
-std::vector<mst::core::maybe_candidate_edge>
-reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
-              int rank, int size, int vertex_count, int root_rank_value,
-              MPI_Comm comm,
-              mst::execution::mpi_round<mst::execution::local_minima_computed>) {
+std::vector<mst::core::maybe_candidate_edge> reduce_minima(
+    const std::vector<mst::core::maybe_candidate_edge> &local, int rank,
+    int size, int vertex_count, int root_rank_value, MPI_Comm comm,
+    mst::execution::mpi_round<mst::execution::local_minima_computed>) {
   std::vector<int> local_weights(static_cast<std::size_t>(vertex_count),
                                  mst::core::infinite_weight.value());
   std::vector<int> local_u(static_cast<std::size_t>(vertex_count), -1);
@@ -101,10 +99,8 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
     }
     local_weights[static_cast<std::size_t>(component)] =
         candidate->value.weight.value();
-    local_u[static_cast<std::size_t>(component)] =
-        candidate->value.u.value();
-    local_v[static_cast<std::size_t>(component)] =
-        candidate->value.v.value();
+    local_u[static_cast<std::size_t>(component)] = candidate->value.u.value();
+    local_v[static_cast<std::size_t>(component)] = candidate->value.v.value();
   }
 
   std::vector<int> gathered_weights;
@@ -117,8 +113,9 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
     gathered_v.resize(gathered_size);
   }
 
-  MPI_Gather(local_weights.data(), vertex_count, MPI_INT, gathered_weights.data(),
-             vertex_count, MPI_INT, root_rank_value, comm);
+  MPI_Gather(local_weights.data(), vertex_count, MPI_INT,
+             gathered_weights.data(), vertex_count, MPI_INT, root_rank_value,
+             comm);
   MPI_Gather(local_u.data(), vertex_count, MPI_INT, gathered_u.data(),
              vertex_count, MPI_INT, root_rank_value, comm);
   MPI_Gather(local_v.data(), vertex_count, MPI_INT, gathered_v.data(),
@@ -138,13 +135,12 @@ reduce_minima(const std::vector<mst::core::maybe_candidate_edge> &local,
       if (weight == mst::core::infinite_weight.value()) {
         continue;
       }
-      const mst::core::candidate_edge candidate{
-          mst::core::edge{
-              mst::core::make_vertex_id(
-                  gathered_u[static_cast<std::size_t>(offset + component)]),
-              mst::core::make_vertex_id(
-                  gathered_v[static_cast<std::size_t>(offset + component)]),
-              mst::core::make_edge_weight(weight)}};
+      const mst::core::candidate_edge candidate{mst::core::edge{
+          mst::core::make_vertex_id(
+              gathered_u[static_cast<std::size_t>(offset + component)]),
+          mst::core::make_vertex_id(
+              gathered_v[static_cast<std::size_t>(offset + component)]),
+          mst::core::make_edge_weight(weight)}};
       const mst::core::maybe_candidate_edge next = candidate;
       if (mst::core::better_candidate(
               next, best[static_cast<std::size_t>(component)])) {
@@ -198,7 +194,8 @@ int main(std::int32_t argc, char **argv) {
   const double mst_start = MPI_Wtime();
 
   while (true) {
-    const auto broadcast_phase = broadcast_parents(dsu, root_rank, MPI_COMM_WORLD);
+    const auto broadcast_phase =
+        broadcast_parents(dsu, root_rank, MPI_COMM_WORLD);
     if (dsu.component_count() <= 1) {
       break;
     }
@@ -209,14 +206,16 @@ int main(std::int32_t argc, char **argv) {
     const int end =
         edge_end_for_rank(static_cast<int>(graph.edges().size()), rank, size);
     const double local_compute_start = MPI_Wtime();
-    const auto local = compute_local_minima(graph, dsu, begin, end, broadcast_phase);
+    const auto local =
+        compute_local_minima(graph, dsu, begin, end, broadcast_phase);
     local_compute_seconds += MPI_Wtime() - local_compute_start;
-    const auto reduced = reduce_minima(
-        local, rank, size, graph.vertex_count(), root_rank, MPI_COMM_WORLD, {});
+    const auto reduced = reduce_minima(local, rank, size, graph.vertex_count(),
+                                       root_rank, MPI_COMM_WORLD, {});
 
     int continue_flag = 0;
     if (rank == root_rank) {
-      continue_flag = apply_contractions(reduced, dsu, mst_edges, total_weight) ? 1 : 0;
+      continue_flag =
+          apply_contractions(reduced, dsu, mst_edges, total_weight) ? 1 : 0;
     }
 
     MPI_Bcast(&continue_flag, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
@@ -255,10 +254,10 @@ int main(std::int32_t argc, char **argv) {
     report << "  \"timings\": {\n";
     report << "    \"total_seconds\": " << (total_end - total_start) << ",\n";
     report << "    \"mst_loop_seconds\": " << (mst_end - mst_start) << ",\n";
-    report << "    \"max_local_compute_seconds\": "
-           << max_local_compute_seconds << ",\n";
-    report << "    \"avg_local_compute_seconds\": "
-           << avg_local_compute_seconds << "\n";
+    report << "    \"max_local_compute_seconds\": " << max_local_compute_seconds
+           << ",\n";
+    report << "    \"avg_local_compute_seconds\": " << avg_local_compute_seconds
+           << "\n";
     report << "  },\n";
     report << "  \"capabilities\": {\n";
     report << "    \"world_size\": " << size << ",\n";

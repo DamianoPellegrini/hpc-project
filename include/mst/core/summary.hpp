@@ -28,8 +28,8 @@ inline std::string mst_summary(const std::vector<mst_edge> &edges,
       << '\n';
   for (const mst_edge &edge_value : sorted) {
     out << "  " << edge_value.value.u.value() << "-"
-        << edge_value.value.v.value() << " ("
-        << edge_value.value.weight.value() << ")\n";
+        << edge_value.value.v.value() << " (" << edge_value.value.weight.value()
+        << ")\n";
   }
   return out.str();
 }

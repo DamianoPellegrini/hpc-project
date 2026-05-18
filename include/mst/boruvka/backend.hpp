@@ -3,8 +3,8 @@
 #include <concepts>
 #include <vector>
 
-#include "mst/core/graph.hpp"
 #include "mst/core/edge.hpp"
+#include "mst/core/graph.hpp"
 
 namespace mst::boruvka {
 

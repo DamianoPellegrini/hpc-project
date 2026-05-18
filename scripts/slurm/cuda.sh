@@ -31,7 +31,7 @@ module load amd/gcc-12.2.1/openmpi-4.1.6
 module load amd/nvidia/cuda-12.3.2
 
 cd "$REPO_DIR"
-make cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
+make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
 
 ./build/cuda/cuda_app
 

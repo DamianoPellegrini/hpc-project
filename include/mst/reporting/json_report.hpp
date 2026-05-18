@@ -101,8 +101,8 @@ inline std::string common_metadata_json(std::string_view backend,
   out << "  \"success\": " << (success ? "true" : "false") << ",\n";
   out << "  \"timestamp\": \"" << json_escape(utc_timestamp()) << "\",\n";
   out << "  \"hostname\": \"" << json_escape(hostname()) << "\",\n";
-  out << "  \"slurm_job_id\": \""
-      << json_escape(env_or_empty("SLURM_JOB_ID")) << "\"";
+  out << "  \"slurm_job_id\": \"" << json_escape(env_or_empty("SLURM_JOB_ID"))
+      << "\"";
   return out.str();
 }
 

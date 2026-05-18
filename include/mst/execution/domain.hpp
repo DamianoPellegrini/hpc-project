@@ -20,8 +20,7 @@ struct minima_reduced {};
 /// MPI round after parent synchronization.
 struct parents_synchronized {};
 
-template <class phase_t>
-struct mpi_round {
+template <class phase_t> struct mpi_round {
   int value = 0;
 };
 

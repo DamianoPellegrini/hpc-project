@@ -26,8 +26,8 @@ private:
     return lhs.value_ == rhs.value_;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(vertex_id lhs, vertex_id rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(vertex_id lhs,
+                                                    vertex_id rhs) noexcept {
     return lhs.value_ <=> rhs.value_;
   }
 };
@@ -53,8 +53,8 @@ private:
     return lhs.value_ == rhs.value_;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(component_id lhs, component_id rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(component_id lhs,
+                                                    component_id rhs) noexcept {
     return lhs.value_ <=> rhs.value_;
   }
 };
@@ -67,8 +67,8 @@ struct rank_id {
     return lhs.value == rhs.value;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(rank_id lhs, rank_id rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(rank_id lhs,
+                                                    rank_id rhs) noexcept {
     return lhs.value <=> rhs.value;
   }
 };
@@ -81,8 +81,8 @@ struct edge_index {
     return lhs.value == rhs.value;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(edge_index lhs, edge_index rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(edge_index lhs,
+                                                    edge_index rhs) noexcept {
     return lhs.value <=> rhs.value;
   }
 };
@@ -96,8 +96,8 @@ struct partition_id {
     return lhs.value == rhs.value;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(partition_id lhs, partition_id rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(partition_id lhs,
+                                                    partition_id rhs) noexcept {
     return lhs.value <=> rhs.value;
   }
 };
@@ -110,8 +110,8 @@ struct round_index {
     return lhs.value == rhs.value;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(round_index lhs, round_index rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(round_index lhs,
+                                                    round_index rhs) noexcept {
     return lhs.value <=> rhs.value;
   }
 };
@@ -132,8 +132,8 @@ private:
     return lhs.value_ == rhs.value_;
   }
 
-  friend constexpr std::strong_ordering
-  operator<=>(edge_weight lhs, edge_weight rhs) noexcept {
+  friend constexpr std::strong_ordering operator<=>(edge_weight lhs,
+                                                    edge_weight rhs) noexcept {
     return lhs.value_ <=> rhs.value_;
   }
 };
@@ -155,8 +155,14 @@ struct acyclic {};
 
 inline constexpr edge_weight infinite_weight{std::numeric_limits<int>::max()};
 
-constexpr vertex_id make_vertex_id(int value) noexcept { return vertex_id{value}; }
-constexpr component_id make_component_id(int value) noexcept { return component_id{value}; }
-constexpr edge_weight make_edge_weight(int value) noexcept { return edge_weight{value}; }
+constexpr vertex_id make_vertex_id(int value) noexcept {
+  return vertex_id{value};
+}
+constexpr component_id make_component_id(int value) noexcept {
+  return component_id{value};
+}
+constexpr edge_weight make_edge_weight(int value) noexcept {
+  return edge_weight{value};
+}
 
 } // namespace mst::core

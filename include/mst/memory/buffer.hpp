@@ -18,8 +18,7 @@ struct pageable_memory {};
 /// Unified host/device memory.
 struct unified_memory {};
 
-template <class value_t, class residency_t>
-class host_buffer {
+template <class value_t, class residency_t> class host_buffer {
 public:
   host_buffer() = default;
 
@@ -35,8 +34,7 @@ private:
   std::vector<value_t> values_;
 };
 
-template <class value_t>
-class device_buffer {
+template <class value_t> class device_buffer {
 public:
   device_buffer() = default;
   device_buffer(value_t *data, std::size_t size) : data_(data), size_(size) {}

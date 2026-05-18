@@ -28,7 +28,7 @@ module load amd/gcc/gcc-12
 module load amd/gcc-12.2.1/openmpi-4.1.6
 
 cd "$REPO_DIR"
-make mpi MPICXX=mpicxx
+make USE_CMAKE=OFF mpi MPICXX=mpicxx
 
 mpirun -np "${SLURM_CPUS_PER_TASK}" ./build/mpi/mpi_app
 
