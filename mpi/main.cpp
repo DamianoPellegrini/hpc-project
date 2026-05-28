@@ -221,9 +221,14 @@ int main(std::int32_t argc, char **argv) {
   MPI_Reduce(&contract_seconds, &max_contract_seconds, 1, MPI_DOUBLE, MPI_MAX,
              root_rank, MPI_COMM_WORLD);
 
+  const double verification_start = MPI_Wtime();
   const mst::boruvka::verification_result verification =
       mst::boruvka::verify_against_sequential_cpu(graph, mst_edges,
                                                   total_weight);
+  const double verification_seconds = MPI_Wtime() - verification_start;
+  double max_verification_seconds = 0.0;
+  MPI_Reduce(&verification_seconds, &max_verification_seconds, 1, MPI_DOUBLE,
+             MPI_MAX, root_rank, MPI_COMM_WORLD);
   const int local_verification_success = verification.success ? 1 : 0;
   int all_verification_success = 0;
   MPI_Allreduce(&local_verification_success, &all_verification_success, 1,
@@ -262,6 +267,8 @@ int main(std::int32_t argc, char **argv) {
     report << "  \"timings\": {\n";
     report << "    \"total_seconds\": " << (total_end - total_start) << ",\n";
     report << "    \"mst_loop_seconds\": " << (mst_end - mst_start) << ",\n";
+    report << "    \"sequential_cpu_verification_seconds\": "
+           << max_verification_seconds << ",\n";
     report << "    \"max_local_compute_seconds\": " << max_local_compute_seconds
            << ",\n";
     report << "    \"avg_local_compute_seconds\": " << avg_local_compute_seconds

@@ -25,6 +25,9 @@ export MST_RANDOM_MAX_WEIGHT="${MST_RANDOM_MAX_WEIGHT:-10000}"
 export TMPDIR="/scratch_local/$USER/${SLURM_JOB_NAME}_${SLURM_JOB_ID}"
 graph_list="${MST_GRAPHS//,/ }"
 read -r -a graphs <<< "$graph_list"
+extra_edge_list="${MST_RANDOM_EXTRA_EDGES_LIST:-$MST_RANDOM_EXTRA_EDGES}"
+extra_edge_list="${extra_edge_list//,/ }"
+read -r -a random_extra_edges_values <<< "$extra_edge_list"
 
 mkdir -p "$EXPERIMENT_DIR/job_logs" "$RESULTS_DIR" "$TMPDIR"
 
@@ -34,6 +37,9 @@ date
 printf 'MST_GRAPHS=%s vertices=%s extra_edges=%s seed=%s max_weight=%s\n' \
   "$MST_GRAPHS" "$MST_RANDOM_VERTICES" "$MST_RANDOM_EXTRA_EDGES" \
   "$MST_RANDOM_SEED" "$MST_RANDOM_MAX_WEIGHT"
+if [[ -n "${MST_RANDOM_EXTRA_EDGES_LIST:-}" ]]; then
+  printf 'MST_RANDOM_EXTRA_EDGES_LIST=%s\n' "$MST_RANDOM_EXTRA_EDGES_LIST"
+fi
 
 module purge
 module load amd/gcc/gcc-12
@@ -43,11 +49,27 @@ module load amd/nvidia/cuda-12.3.2
 cd "$REPO_DIR"
 make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
 
-for graph in "${graphs[@]}"; do
+run_graph() {
+  local graph="$1"
   export MST_GRAPH="$graph"
-  export MST_REPORT_PATH="$RESULTS_DIR/cuda_${MST_GRAPH}_${SLURM_JOB_ID}.json"
+  local report_name="cuda_${MST_GRAPH}_${SLURM_JOB_ID}.json"
+  if [[ "$MST_GRAPH" == "random" && -n "${MST_RANDOM_EXTRA_EDGES_LIST:-}" ]]; then
+    report_name="cuda_${MST_GRAPH}_v${MST_RANDOM_VERTICES}_e${MST_RANDOM_EXTRA_EDGES}_${SLURM_JOB_ID}.json"
+  fi
+  export MST_REPORT_PATH="$RESULTS_DIR/$report_name"
   printf 'Running CUDA graph=%s report=%s\n' "$MST_GRAPH" "$MST_REPORT_PATH"
   ./build/cuda/cuda_app
+}
+
+for graph in "${graphs[@]}"; do
+  if [[ "$graph" == "random" ]]; then
+    for extra_edges in "${random_extra_edges_values[@]}"; do
+      export MST_RANDOM_EXTRA_EDGES="$extra_edges"
+      run_graph "$graph"
+    done
+  else
+    run_graph "$graph"
+  fi
 done
 
 rm -rf "$TMPDIR"

@@ -1,8 +1,9 @@
 #import "@local/unimib-templates:0.1.0": report-footer, unimib
 #import "data.typ": *
-#import "figures.typ": backend-breakdown-chart, random-total-chart
+#import "figures.typ": backend-breakdown-chart, cuda-sweep-speedup-chart, cuda-sweep-time-chart, random-total-chart
 
 #set text(lang: "it")
+#set math.equation(numbering: "(1)")
 
 #show: unimib.with(
   title: [Implementazione parallela dell'algoritmo di Boruvka per Minimum Spanning Tree],
@@ -29,53 +30,49 @@
   ],
 )
 
-#set heading(numbering: none)
+// #set heading(numbering: none)
 
 #let mpi-random = run("mpi", "random")
 #let openmp-random = run("openmp", "random")
 #let cuda-random = run("cuda", "random")
 
-= Il progetto e il contesto sperimentale
+= Capitolo 1 - Progetto e contesto sperimentale
 
-Il calcolo del Minimum Spanning Tree (MST) è un problema classico della teoria dei grafi, ma diventa interessante in un contesto di calcolo parallelo perché alterna fasi molto regolari, come la scansione degli archi, a fasi più delicate, come la fusione delle componenti. In questo lavoro viene utilizzato l'algoritmo di Boruvka proprio per osservare questo equilibrio: da un lato il problema espone parallelismo naturale, dall'altro richiede strutture dati coerenti e sincronizzazioni non banali.
+La relazione confronta tre modelli di esecuzione applicati alla stessa idea algoritmica: l'algoritmo di Boruvka per il calcolo del Minimum Spanning Tree. I tre backend sono MPI per memoria distribuita, OpenMP per memoria condivisa e CUDA per GPU.
 
-L'obiettivo non è solamente produrre un MST corretto, ma confrontare tre modi diversi di eseguire la stessa idea algoritmica: memoria distribuita con MPI, memoria condivisa con OpenMP e parallelismo massivo su GPU con CUDA. Per rendere il confronto più controllabile, il dominio del problema è condiviso in C++20 e ogni backend viene verificato rispetto a una implementazione sequenziale CPU.
-
-Durante le run sul cluster ogni esecuzione produce un report con tempi, risorse usate, peso dell'MST e risultato della verifica. Questo permette di collegare il comportamento osservato alla specifica configurazione di backend, grafo e risorse assegnate da Slurm.
-
-== Organizzazione del report
-
-Partiamo dalla struttura del progetto e dal workflow di esecuzione, così da chiarire quali parti sono condivise e quali invece appartengono ai singoli backend. Successivamente introduciamo l'algoritmo di Boruvka nella sua forma sequenziale e discutiamo quali passaggi possono essere parallelizzati. Infine analizziamo i risultati raccolti sul cluster, confrontando MPI, OpenMP e CUDA sullo stesso insieme di grafi.
+Il confronto usa la stessa rappresentazione del grafo, la stessa semantica degli archi candidati e lo stesso verificatore sequenziale CPU. La differenza tra i backend riguarda solo il modo in cui vengono eseguite scan degli archi, riduzione dei candidati e contrazione della DSU.
 
 == Struttura del codice
 
-La parte comune del progetto vive in `include/mst`. Il modulo `core` contiene i tipi del dominio, come grafi validati, vertici, pesi e archi; `dsu` raccoglie le strutture Union-Find usate per rappresentare le componenti; `boruvka` contiene il verificatore sequenziale e i contratti dell'algoritmo; `app` seleziona il grafo a partire dalle variabili d'ambiente; `reporting` produce i report di esecuzione.
+Il modulo comune risiede in `include/mst`. Il sotto-modulo `core` definisce grafi validati, vertici, archi e pesi; `dsu` contiene le strutture Union-Find; `boruvka` contiene il verificatore sequenziale e i contratti dell'algoritmo; `app` seleziona il grafo dalle variabili d'ambiente; `reporting` produce i report JSON.
 
-I tre backend sono invece mantenuti separati in `mpi/main.cpp`, `openmp/main.cpp` e `cuda/main.cu`. Questa scelta permette di cambiare il modo in cui vengono implementate scansione, riduzione e contrazione senza cambiare la semantica condivisa dell'algoritmo. Tutti i backend ricevono lo stesso grafo e confrontano il risultato con lo stesso verificatore sequenziale.
+I backend sono separati in `mpi/main.cpp`, `openmp/main.cpp` e `cuda/main.cu`. Questa separazione mantiene stabile il dominio del problema e concentra le scelte parallele nei file di backend.
 
-Un punto importante dell'architettura è l'uso dei concept di C++20 per descrivere Boruvka come contratto statico, non come implementazione unica. In `mst::boruvka` il concept `boruvka_round_engine` richiede a un backend di esporre un dominio di esecuzione, uno spazio di memoria, una politica di riduzione, una politica di contrazione e le operazioni fondamentali del round: inizializzazione, ricerca dei minimi locali, riduzione dei minimi per componente, contrazione, compressione dei parent e produzione del risultato. In questo modo l'algoritmo viene definito come sequenza di responsabilità, mentre MPI, OpenMP e CUDA rimangono liberi di implementare quelle responsabilità con meccanismi paralleli diversi.
+I concept C++20 descrivono Boruvka come contratto statico. Il concept `boruvka_round_engine` richiede un dominio di esecuzione, uno spazio di memoria, una politica di riduzione, una politica di contrazione e le operazioni del round. Il compilatore controlla quindi che un backend esponga le responsabilità richieste senza imporre una gerarchia dinamica.
 
-== Scelte progettuali e infrastruttura di build
+== Infrastruttura di build
 
-L'implementazione è costruita attorno a una scomposizione semplice del round di Boruvka: prima si cerca il miglior arco uscente per ogni componente, poi si contraggono le componenti collegate dagli archi scelti, infine si comprime la struttura DSU. Questa divisione rende esplicito dove si trova il lavoro parallelo e dove invece bisogna proteggere la coerenza dello stato.
+Il percorso locale principale usa CMake. Il preset `default` configura una build Debug con Ninja e rileva OpenMP, MPI e CUDA quando sono disponibili.
 
-La scansione degli archi è il punto più naturale da parallelizzare, perché ogni arco può essere valutato indipendentemente una volta fissato lo snapshot dei rappresentanti delle componenti. Le fasi successive sono meno immediate: ridurre i candidati e fondere componenti richiede una strategia diversa a seconda che il modello di esecuzione sia a memoria condivisa, distribuita o su GPU.
+Il percorso remoto usa il `Makefile` perché gli script Slurm devono funzionare anche quando il preset CMake non è la via più stabile sul nodo assegnato. Il Makefile espone target separati per i backend e accetta compilatori espliciti tramite variabili d'ambiente.
 
-Il build system usa CMake come percorso locale principale e un `Makefile` compatibile con l'ambiente Slurm quando CMake o Ninja non sono disponibili. I target sono separati per backend e CMake rileva automaticamente OpenMP, MPI e CUDA quando presenti.
+== Workflow sul cluster
 
-== Workflow di esecuzione sul cluster
+Gli script in `scripts/slurm` preparano l'ambiente, caricano i moduli, compilano il backend e scrivono un report JSON per ogni run. Il report contiene backend, grafo, tempi, risorse, risultato dell'MST e verifica sequenziale.
 
-Le run remote sono gestite dagli script in `scripts/slurm`. Ogni script prepara l'ambiente, compila il backend richiesto e poi esegue la stessa matrice di grafi, producendo un report per ogni combinazione backend-grafo. In questo modo il risultato sperimentale rimane vicino al codice che lo ha prodotto.
+Le run di riferimento usano un task con quattro CPU per OpenMP, due processi per MPI e una GPU NVIDIA L40S per CUDA. Il report CUDA rileva 142 SM e 1024 thread per blocco.
 
-OpenMP viene eseguito con un task e quattro CPU, MPI con due processi, CUDA con una GPU nella partizione dedicata. La configurazione del grafo `random` usata nei report disponibili è: #run("mpi", "random").vertices vertici, #run("mpi", "random").edges archi, seed #run("mpi", "random").raw.graph.seed e peso massimo #run("mpi", "random").raw.graph.max_weight.
+Il grafo `random` usato per il confronto principale ha $n = 32768$ vertici, $m = 229375$ archi, seed 886261 e peso massimo 10000. La densità del grafo è $m / n approx 7$.
 
-= Boruvka come algoritmo parallelo
+= Capitolo 2 - Analisi teorica di Boruvka parallelo
 
-== Dinamica della versione sequenziale
+Questo capitolo deriva il modello dall'algoritmo. I risultati sperimentali non vengono usati per definire lavoro, overhead, speedup o soglie.
 
-Boruvka mantiene una partizione dei vertici in componenti connesse. All'inizio ogni vertice è una componente isolata. A ogni round, per ogni componente viene scelto l'arco uscente di peso minimo; gli archi scelti diventano candidati per l'MST e le componenti collegate vengono fuse. Il processo continua finché resta una sola componente oppure finché non viene più ammessa alcuna contrazione.
+== Dinamica sequenziale
 
-In forma compatta:
+Boruvka mantiene una partizione dei vertici in componenti connesse. Ogni round sceglie, per ciascuna componente, l'arco uscente di peso minimo e poi contrae le componenti collegate dagli archi scelti.
+
+Il round contiene tre fasi. La scan visita gli archi e calcola i candidati. La reduce seleziona un candidato per componente. La contract aggiorna la DSU e ammette gli archi nell'MST.
 
 ```text
 while component_count > 1:
@@ -91,151 +88,317 @@ while component_count > 1:
       add candidate to MST
 ```
 
-Il costo di un round è dominato dalla scansione degli archi. Poiché ogni round riduce il numero di componenti di almeno un fattore costante nel caso ideale, il numero di round rimane in genere contenuto; nei report disponibili il grafo `random` termina in #run("mpi", "random").rounds round.
+Il costo di un round sequenziale è $Theta(m + n)$, perché la scan visita $m$ archi e la gestione dei candidati visita al più $n$ componenti. Per un grafo connesso vale $m >= n - 1$, quindi il termine dominante è $m$.
 
-== Dove nasce il parallelismo
+$
+  W = T_s = Theta(r dot m)
+$ <eq:seq-work>
 
-Il primo punto utile da parallelizzare è la ricerca degli archi migliori. Ogni worker può valutare un sottoinsieme degli archi e produrre candidati locali, perché la decisione su un arco dipende solo dai rappresentanti delle due estremità nello snapshot corrente. Dopo questa fase serve però una riduzione per componente, così da ottenere un unico candidato globale per ciascuna componente.
+La formula @eq:seq-work usa $r$ come numero di round. Per Boruvka il numero di componenti diminuisce di un fattore costante per round, quindi $r = O(log n)$.
 
-La contrazione e la compressione della DSU possono essere anch'esse accelerate, ma sono più sensibili alla sincronizzazione. Il parallelismo diventa conveniente quando il costo della scansione degli archi domina il costo di riduzione, coordinazione e aggiornamento della DSU. Su grafi piccoli l'overhead del backend può superare il lavoro utile; su grafi più grandi la scansione diventa abbastanza ampia da ammortizzare la coordinazione.
+== Parallelismo disponibile
 
-== Modello di costo e soglia di convenienza
+La scan è data-parallel sugli archi. Dato uno snapshot dei rappresentanti, la valutazione di un arco non dipende dalla valutazione degli altri archi.
 
-Indichiamo con $n = |V|$ il numero di vertici, con $m = |E|$ il numero di archi, con $p$ il numero di worker e con $r$ il numero di round. Come baseline, consideriamo prima il costo sequenziale di un round. La parte dominante è la scansione degli archi, perché per ogni arco bisogna leggere i rappresentanti delle due estremità e aggiornare, se necessario, il candidato della componente:
+La reduce ha parallelismo per componente. Ogni worker può produrre una tabella locale di candidati di dimensione $n$, ma le $p$ tabelle devono essere combinate per ottenere un candidato globale per componente.
 
-$ T_1^("round") approx c_e m + c_u n $
+La contract ha parallelismo più debole. Le fusioni modificano la DSU, quindi due candidati possono competere sugli stessi rappresentanti e richiedere sincronizzazione.
 
-dove $c_e$ rappresenta il costo medio di valutazione di un arco e $c_u n$ raccoglie la fase di contrazione dei candidati. Su $r$ round otteniamo quindi:
+Le tre fasi hanno qualità di parallelismo diversa. La scan scala con $m$, la reduce scala con $n$ e $p$, la contract scala con la contesa sulla DSU.
 
-$ T_1 approx r dot (c_e m + c_u n) $
+== Modello di costo
 
-Nel caso parallelo generico conviene separare tempo parallelo e work totale. In un round, la scansione continua a visitare tutti gli archi, quindi il work utile resta $O(m)$, ma il tempo ideale della scansione diventa $O(m / p)$. Ogni worker mantiene poi una tabella locale dei migliori candidati per componente: inizializzarla richiede $O(n)$ per worker, quindi $O(p n)$ work complessivo. La riduzione finale guarda i candidati dei $p$ worker per ogni componente e aggiunge un altro $O(p n)$ work. Contrazione e compressione rimangono lineari nel numero di componenti attive.
+Il modello segue il formalismo di Kumar, capitolo 5. Il lavoro è il tempo della migliore esecuzione sequenziale dello stesso algoritmo.
 
-Il work parallelo di un round è quindi:
+$
+  W = T_s
+$ <eq:work-def>
 
-$ W_p^("round") = O(m + 2 p n + n) $
+L'overhead parallelo misura la differenza tra il costo processore-tempo e il lavoro sequenziale.
 
-Il tempo parallelo dipende da quanto bene il backend riesce a distribuire inizializzazione e riduzione dei candidati. Nel caso ideale, questi due passaggi lineari sono divisi tra i worker e il tempo per round è:
+$
+  T_o = p dot T_p - T_s
+$ <eq:overhead-def>
 
-$ T_p^("round") approx c_e frac(m, p) + c_o n + L_p $
+Lo speedup e l'efficienza si ottengono da @eq:work-def e @eq:overhead-def.
 
-dove $L_p$ raccoglie sincronizzazioni, comunicazione e latenze specifiche del backend. La soglia pratica usata qui nasce però dal work: il lavoro utile sugli archi deve almeno ammortizzare il lavoro aggiuntivo sui candidati. Questo significa chiedere:
+$
+  S_p = frac(T_s, T_p)
+$ <eq:speedup-def>
 
-$ m >= 2 p n $
+$
+  E_p = frac(S_p, p) = frac(T_s, p dot T_p) = frac(W, W + T_o)
+$ <eq:efficiency-def>
 
-La stessa condizione si può leggere per worker dividendo per $p$:
+Un algoritmo parallelo è cost-optimal quando il costo processore-tempo è dello stesso ordine del lavoro sequenziale.
 
-$ m / p >= 2 n $
+$
+  p dot T_p = Theta(W) <=> T_o = O(W)
+$ <eq:cost-optimality>
 
-La lettura è semplice: ogni worker deve ricevere almeno circa due archi per ogni vertice, perché nello stesso round paga due passaggi lineari sui candidati, uno per prepararli e uno per ridurli. Se il grafo sta sotto questa soglia, il parallelismo tende a fare troppo lavoro di coordinazione rispetto alla scansione degli archi.
+L'isoefficienza fissa un valore minimo di efficienza e ricava quanto deve crescere il lavoro per mantenere quel valore.
 
-Se invece confrontiamo direttamente il tempo parallelo ideale con la baseline sequenziale e assumiamo $L_p approx 0$ e $c_o approx 2 c_e$, otteniamo:
+$
+  W = K dot T_o quad "con" quad K = frac(E_("min"), 1 - E_("min"))
+$ <eq:isoefficiency>
 
-$ frac(m, p) + 2 n < m $
+La soglia operativa scelta è $E_("min") = 1 / 2$. Da @eq:isoefficiency segue $K = 1$, quindi il lavoro richiesto coincide con l'overhead.
 
-cioè:
+$
+  E_("min") = frac(1, 2) => W = T_o
+$ <eq:half-efficiency>
 
-$ m > frac(2 p n, p - 1) $
+== Modello per backend
 
-Questa condizione è una stima di speedup temporale nel caso ideale. La soglia $2 p n$ è più utile per valutare se il parallelismo è sano dal punto di vista del work: se viene rispettata, il costo extra delle strutture parallele non domina il lavoro effettivo sugli archi.
+=== MPI
+
+MPI distribuisce staticamente gli archi tra $p$ processi. Ogni processo esegue la scan su $m / p$ archi.
+
+La riduzione usa una `MPI_Allreduce` su $n$ chiavi. Nel modello alpha-beta il costo è $Theta(alpha dot log p + beta dot n dot log p)$, dove $alpha$ è la latenza e $beta$ è il costo per parola.
+
+La contract viene applicata da tutti i processi sulla stessa lista ridotta. Il costo conservativo della fase è $Theta(n)$, perché la lista dei candidati ha una posizione per componente.
+
+Trascurando $alpha dot log p$ per $n$ grande, il tempo parallelo per round è:
+
+$
+  T_p^("MPI") = Theta(frac(m, p) + n dot log p)
+$ <eq:mpi-time>
+
+L'overhead totale su $r$ round deriva da @eq:overhead-def e @eq:mpi-time.
+
+$
+  T_o^("MPI") = Theta(r dot p dot n dot log p)
+$ <eq:mpi-overhead>
+
+La cost-optimality richiede che @eq:mpi-overhead sia asintoticamente dominato da @eq:seq-work.
+
+$
+  m = Omega(p dot n dot log p)
+$ <eq:mpi-cost-optimality>
+
+L'isoefficienza corrispondente è:
+
+$
+  W = Theta(p dot n dot log p)
+$ <eq:mpi-isoefficiency>
+
+Con la soglia operativa @eq:half-efficiency, la densità richiesta per MPI è:
+
+$
+  frac(m, n) >= p dot log p
+$ <eq:mpi-threshold>
+
+=== OpenMP
+
+OpenMP usa memoria condivisa e divide la scan tra $p$ thread. Ogni thread valuta $m / p$ archi e scrive il candidato in uno slot locale di dimensione $n$.
+
+La riduzione ottimale dei candidati può essere organizzata come albero sui $p$ thread. Il tempo della reduce è $Theta(n dot log p / p)$, mentre il lavoro totale introdotto dai buffer locali è $Theta(p dot n)$.
+
+La contract usa una DSU condivisa con path compression e operazioni atomiche. Il costo conservativo per round è $Theta(n)$, perché la fase visita i candidati delle componenti.
+
+Il tempo parallelo per round è:
+
+$
+  T_p^("OMP") = Theta(frac(m, p) + n)
+$ <eq:omp-time>
+
+L'overhead totale su $r$ round è:
+
+$
+  T_o^("OMP") = Theta(r dot p dot n)
+$ <eq:omp-overhead>
+
+La cost-optimality richiede:
+
+$
+  m = Omega(p dot n)
+$ <eq:omp-cost-optimality>
+
+L'isoefficienza di OpenMP è:
+
+$
+  W = Theta(p dot n)
+$ <eq:omp-isoefficiency>
+
+Con la soglia @eq:half-efficiency, la densità richiesta diventa:
+
+$
+  frac(m, n) >= p
+$ <eq:omp-threshold>
+
+OpenMP elimina il fattore $log p$ della collettiva MPI. Il confronto tra @eq:mpi-threshold e @eq:omp-threshold prevede quindi una soglia asintotica migliore per la memoria condivisa.
+
+=== CUDA
+
+CUDA associa un thread logico a ogni arco nella fase di scan, quindi per questa fase vale $p = m$. Il kernel `scan_edges_kernel` valuta gli archi in parallelo, calcola i rappresentanti delle estremità e aggiorna la tabella globale `best` con una `atomicMin` diretta su una chiave `uint64_t` impacchettata, con peso nei 32 bit alti e indice dell'arco nei 32 bit bassi. L'implementazione non usa un loop CAS e non introduce retry espliciti.
+
+Su una distribuzione random degli archi tra componenti, l'aggiornamento atomico ha costo atteso $O(1)$ ammortizzato per thread. La scan ha quindi tempo parallelo:
+
+$
+  T_("scan")^("CUDA") = Theta(1)
+$ <eq:cuda-scan-time>
+
+La funzione `find_root_device` usa path splitting con CAS. Il costo ammortizzato della ricerca è $O(log^* n)$ e viene trattato come fattore quasi costante nel modello asintotico delle fasi aggregate.
+
+La contract è eseguita da `contract_candidates_kernel` con un thread per componente, non con un thread per arco. Se $q = min(m, "thread fisici GPU")$, il costo parallelo della contract è:
+
+$
+  T_("contract")^("CUDA") = Theta(frac(n, q))
+$ <eq:cuda-contract-time>
+
+La forma conservativa di @eq:cuda-contract-time è $Theta(n)$, perché il kernel visita al più una posizione per componente. La probabilità di race su `unite_device` resta bassa nel modello random, dato che la contract opera sui candidati per componente e non su tutti gli archi.
+
+Combinando @eq:cuda-scan-time e @eq:cuda-contract-time con $p = m$, il tempo parallelo per round è:
+
+$
+  T_p^("CUDA") = Theta(frac(n, m) + 1)
+$ <eq:cuda-time>
+
+Da @eq:cuda-time segue $T_p^("CUDA") = Theta(1)$ per $m >= n$. Per $m < n$, il termine dominante diventa $Theta(n / m)$.
+
+L'overhead della scan si cancella rispetto al lavoro sequenziale sugli archi. Il termine residuo è la contract sulle componenti:
+
+$
+  T_o^("CUDA") = (Theta(m dot 1) - Theta(m)) + Theta(n) = Theta(n)
+$ <eq:cuda-overhead>
+
+La cost-optimality segue da @eq:cuda-overhead e dal fatto che, per un grafo connesso, $n = O(m)$:
+
+$
+  T_o^("CUDA") = Theta(n) = O(frac(W, r)) = O(m)
+$ <eq:cuda-cost-optimality>
+
+L'isoefficienza CUDA coincide con il lower bound teorico delle slide basate su Kumar, capitolo 5:
+
+$
+  W = Theta(p)
+$ <eq:cuda-isoefficiency>
+
+Su grafi con componenti ad altissimo grado, per esempio una stella, molti thread possono aggiornare la stessa cella di `best` e la contesa su `atomicMin` può degradare la scan. Il modello di @eq:cuda-scan-time descrive il comportamento atteso su grafi random, dove la distribuzione degli archi tra componenti mantiene il costo ammortizzato per thread pari a $O(1)$.
+
+I costi fissi di setup sono $Theta(n + m)$ una tantum, mentre i lanci dei kernel sono $Theta(1)$ per round. Questi termini non cambiano @eq:cuda-isoefficiency, ma introducono una costante moltiplicativa rilevante.
+
+Il modello CUDA è il più favorevole per grafi densi, cioè per $m >> n$. In quel regime la scan espone abbastanza parallelismo da ammortizzare la contract su $n$ componenti.
+
+== Confronto dei modelli
 
 #figure(
   table(
-    columns: (0.9fr, 0.7fr, 1fr, 1fr, 1fr, 0.9fr),
-    align: (left, right, right, right, right, right),
-    table.header([*Backend*], [*$p$*], [*$m / p$*], [*$2 n$*], [*$2 p n$*], [*$m / (2 p n)$*]),
-    [MPI], [#worker-count(mpi-random)], [#calc.round(per-worker-edge-count(mpi-random), digits: 0)], [#per-worker-candidate-threshold(mpi-random)], [#cpu-cost-threshold(mpi-random)], [#calc.round(cpu-cost-ratio(mpi-random), digits: 2)],
-    [OpenMP], [#worker-count(openmp-random)], [#calc.round(per-worker-edge-count(openmp-random), digits: 0)], [#per-worker-candidate-threshold(openmp-random)], [#cpu-cost-threshold(openmp-random)], [#calc.round(cpu-cost-ratio(openmp-random), digits: 2)],
+    columns: (1fr, 1.35fr, 1.35fr, 1.25fr),
+    align: (left, left, left, left),
+    table.header([*Backend*], [*$T_o$*], [*Isoefficienza*], [*Soglia operativa*]),
+    [MPI], [$Theta(r dot p dot n dot log p)$], [$W = Theta(p dot n dot log p)$], [$m / n >= p dot log p$],
+    [OpenMP], [$Theta(r dot p dot n)$], [$W = Theta(p dot n)$], [$m / n >= p$],
+    [CUDA], [$Theta(n)$], [$W = Theta(p)$], [lower bound teorico],
   ),
-  caption: [Calcolo della soglia pratica $m >= 2 p n$ sul grafo `random` per i backend CPU.]
-) <tab:cost-threshold>
+  caption: [Modelli teorici dei tre backend.],
+) <tab:theory-summary>
 
-Nel grafo `random` disponibile, MPI supera la soglia pratica con rapporto #calc.round(cpu-cost-ratio(mpi-random), digits: 2), mentre OpenMP rimane leggermente sotto con rapporto #calc.round(cpu-cost-ratio(openmp-random), digits: 2). Questo indica che, con quattro thread, il grafo non è ancora abbastanza denso da rendere il lavoro sugli archi chiaramente dominante rispetto alle strutture per-thread. Per CUDA la stessa idea resta qualitativamente valida, ma non è corretto sostituire direttamente $p$ con il numero di SM: il parallelismo è molto più fine e il costo pratico include anche lanci kernel, sincronizzazioni e gestione della memoria device.
+Nota. Per CUDA vale $p = m$, quindi la soglia non è confrontabile direttamente con MPI e OpenMP. Il modello usa l'implementazione concreta con `atomicMin` diretta su chiavi `uint64_t`, non un'ipotesi ottimistica priva di contesa.
 
-Lo speedup e l'efficienza rimangono definiti nel modo classico:
+La tabella @tab:theory-summary riassume il ruolo delle fasi non-scan. MPI paga una riduzione collettiva su $n$ chiavi, OpenMP paga strutture locali in memoria condivisa, CUDA paga atomiche e contract su $n$ componenti.
 
-$ S_p = T_1 / T_p $
-$ E_p = S_p / p = T_1 / (p dot T_p) $
+La scan è il collo di bottiglia comune perché visita tutti gli archi. Reduce e contract determinano la scalabilità perché hanno struttura diversa nei tre modelli.
 
-L'overhead parallelo è:
+= Capitolo 3 - Implementazioni
 
-$ T_o = p dot T_p - T_1 $
+Il codice implementa lo stesso round astratto nei tre backend. Ogni backend realizza scan, reduce e contract con primitive diverse e si discosta dal modello ideale in punti diversi.
 
-Il work sequenziale è $W_1 = T_1$. Il work complessivo consumato dai worker paralleli, dal modello sopra, è:
+== MPI
 
-$ W_p = O(r dot (m + 2 p n + n)) $
+Il backend MPI usa una distribuzione statica degli archi. Il processo di rango $i$ riceve l'intervallo $[m i / p, m (i + 1) / p)$ e calcola i candidati locali per le componenti incontrate.
 
-L'overhead è il lavoro in più introdotto dal backend rispetto alla baseline sequenziale:
+La reduce impacchetta ogni candidato in una chiave ordinabile. La chiave contiene peso e indice dell'arco, quindi una `MPI_Allreduce` con operazione `MIN` seleziona lo stesso candidato globale su tutti i processi.
 
-$ T_o = W_p - W_1 = O(r dot p n) $
+La contract viene eseguita da ogni processo sulla lista ridotta. Tutti i processi applicano le stesse fusioni alla DSU locale e mantengono lo stesso stato logico dopo il round.
 
-Per un numero fissato di worker, la soglia pratica resta quindi governata dal rapporto tra $m$ e $2 p n$: sotto quella soglia il costo di coordinazione può cancellare il beneficio della scansione parallela. In termini di isoefficienza, invece, se si vuole aumentare $p$ mantenendo efficienza costante, il lavoro utile deve crescere almeno quanto l'overhead; nel modello sopra questo significa far crescere il numero di archi almeno nell'ordine di $p n$.
+Lo scostamento dall'ottimo teorico nasce dalla collettiva. Anche con pochi processi, la `MPI_Allreduce` comunica $n$ chiavi per round e introduce il termine $n dot log p$ di @eq:mpi-time.
 
-Nelle misure attuali manca una baseline sequenziale temporizzata. Per questo il modello usa $T_1$ come riferimento teorico e il confronto sperimentale resta relativo ai backend disponibili.
+== OpenMP
 
-== Strategie parallele adottate
+Il backend OpenMP usa memoria condivisa. I thread dividono la scan con un ciclo parallelo sugli archi e leggono uno snapshot dei rappresentanti delle componenti.
 
-=== Distribuzione degli archi con MPI
+La versione ottimale del backend mantiene un buffer per-thread di dimensione $n$ fuori dal loop MST. A ogni round il buffer viene azzerato e poi riusato, evitando una riallocazione completa nel percorso critico.
 
-MPI distribuisce gli archi tra processi. Ogni processo calcola i migliori candidati locali sul proprio intervallo di archi; poi una `MPI_Allreduce` con minimo sulle chiavi dei candidati produce il candidato globale per ogni componente. La contrazione viene eseguita in modo coerente da tutti i processi sulla stessa lista ridotta.
+La reduce combina i candidati locali per componente. Una riduzione parallela ad albero raggiunge il costo teorico di @eq:omp-time, mentre una scansione seriale dei buffer aumenterebbe le costanti senza modificare l'ordine asintotico del lavoro totale.
 
-Il costo caratteristico di MPI è la riduzione globale per round. Questo backend risulta adatto quando la scansione locale degli archi è abbastanza ampia da compensare il costo della comunicazione collettiva.
+La contract usa una DSU parallela con operazioni atomiche di tipo compare-and-swap. Le atomiche impediscono fusioni incoerenti, ma trasformano la contract nella fase meno regolare del backend.
 
-=== Memoria condivisa con OpenMP
+OpenMP si discosta dall'ideale quando la contract incontra contesa sulla DSU o quando il buffer locale viene gestito nel corpo del round. Il modello @eq:omp-overhead resta valido se il costo dominante non diventa la gestione ripetuta della memoria.
 
-OpenMP usa memoria condivisa e divide la scansione degli archi tra thread. Per evitare aggiornamenti concorrenti diretti sulla stessa tabella `best`, ogni thread produce un array locale di candidati; una fase di riduzione combina poi i risultati locali per componente. La contrazione usa strutture locali per gli archi ammessi e una DSU parallela.
+== CUDA
 
-Il costo caratteristico è la gestione delle strutture per-thread e delle sincronizzazioni in memoria condivisa. La granularità del lavoro è quindi importante: su input piccoli, il costo fisso della regione parallela può dominare.
+Il backend CUDA mantiene su device gli archi, i parent della DSU, la tabella `best` dei candidati e i contatori del round. L'allocazione device viene trattata come costo di setup esterno alla parte ripetuta del loop MST.
 
-=== Esecuzione massiva su GPU con CUDA
+La fase di init prepara parent e strutture ausiliarie. Un kernel successivo resetta lo stato del round e inizializza `best`.
 
-CUDA porta su device gli archi e la DSU, poi usa kernel separati per inizializzare i candidati, scansionare gli archi, contrarre e comprimere. Il backend sfrutta molti thread GPU, ma introduce costi di setup, sincronizzazione tra kernel e copie host-device/device-host.
+La scan assegna un thread a ogni arco. Ogni thread trova i rappresentanti delle due estremità e aggiorna la tabella globale dei candidati con `atomicMin`.
 
-Il modello è vantaggioso quando il lavoro per round è sufficiente a riempire la GPU. Su grafi piccoli, i tempi fissi del lancio kernel e della gestione device possono pesare più della scansione effettiva.
+La contract usa un kernel separato sui candidati. Il kernel tenta le fusioni nella DSU device e registra gli archi ammessi.
 
-== Implicazioni sui tre modelli di esecuzione
+La compress esegue un ulteriore kernel sui vertici. La compressione riduce il costo dei `find` nei round successivi, ma richiede un lancio kernel aggiuntivo.
 
-I tre backend mettono in evidenza costi diversi. MPI paga comunicazione collettiva ma può scalare su più nodi; OpenMP evita la comunicazione di rete, ma resta vincolato alla memoria condivisa e al numero di core della macchina; CUDA espone un parallelismo molto più fine, ma richiede trasferimenti e sincronizzazioni esplicite. Il confronto reale dipende quindi da dimensione del grafo, densità, numero di round, granularità della scansione e costo fisso del backend.
+CUDA si discosta dall'ideale per tre motivi. Le atomiche concentrano contesa su componenti ad alto grado, i kernel hanno costi di lancio non nulli e il numero di thread fisici simultanei è inferiore al numero logico $m$ quando il grafo è grande.
 
-= Misure sperimentali sul cluster
+= Capitolo 4 - Misure sperimentali
 
-Le misure che seguono derivano dai report prodotti dalle run sul cluster. Ogni run registra backend, grafo, tempi, risorse, peso MST e verifica rispetto alla CPU sequenziale.
+Le misure sperimentali verificano il modello del Capitolo 2 sui report prodotti dalle run Slurm. Ogni report registra backend, grafo, tempi, risorse, peso MST e verifica rispetto al verificatore sequenziale CPU.
 
-== Ambiente di misura e configurazione delle run
+Il grafo `random` è il punto principale del confronto tra backend. La configurazione ha $n = #mpi-random.vertices$ vertici, $m = #mpi-random.edges$ archi e densità $m / n = #calc.round(edge-density(mpi-random), digits: 2)$.
+
+== Ambiente e configurazione
 
 #figure(
   table(
     columns: (1.1fr, 1.2fr, 1.3fr, 1.4fr),
     align: (left, left, right, left),
     table.header([*Backend*], [*Nodo/device*], [*Risorse*], [*Job Slurm*]),
-    ..backends.map(backend => {
-      let item = run(backend, "random")
-      (
-        [#backend-label(backend)],
-        [#platform(item)],
-        [#workers(item)],
-        [#item.raw.slurm_job_id],
-      )
-    }).flatten()
+    ..backends
+      .map(backend => {
+        let item = run(backend, "random")
+        (
+          [#backend-label(backend)],
+          [#platform(item)],
+          [#workers(item)],
+          [#item.raw.slurm_job_id],
+        )
+      })
+      .flatten(),
   ),
-  caption: [Risorse rilevate nei report per il grafo `random`.]
+  caption: [Risorse rilevate nei report per il grafo `random`.],
 ) <tab:run-config>
 
-== Profilo temporale del backend MPI
+La tabella @tab:run-config conserva la configurazione di esecuzione del documento originale. OpenMP usa #workers(openmp-random), MPI usa #workers(mpi-random) e CUDA usa una #platform(cuda-random) con #workers(cuda-random).
 
-La run MPI usa #workers(mpi-random). Sul grafo `random` il tempo totale è #duration(mpi-random.total). Di questo tempo, #duration(mpi-random.raw.timings.max_local_compute_seconds) sono attribuiti al compute locale massimo e #duration(mpi-random.raw.timings.max_reduce_seconds) alla riduzione massima.
+== MPI - profilo temporale
+
+La run MPI usa #workers(mpi-random). Sul grafo `random` il loop MST dura #duration(mpi-random.loop), mentre la baseline sequenziale CPU misurata nello stesso report dura #duration(sequential-cpu-seconds(mpi-random)).
+
+Il compute locale massimo vale #duration(mpi-random.raw.timings.max_local_compute_seconds), cioè il #percent(mpi-random.raw.timings.max_local_compute_seconds, mpi-random.loop) del loop. La riduzione massima vale #duration(mpi-random.raw.timings.max_reduce_seconds), cioè il #percent(mpi-random.raw.timings.max_reduce_seconds, mpi-random.loop) del loop.
+
+Il profilo MPI è coerente con @eq:mpi-overhead. La riduzione collettiva su $n$ chiavi domina il tempo del loop e rappresenta il termine $n dot log p$ di @eq:mpi-time.
+
+La soglia teorica di @eq:mpi-threshold vale $p dot log p = 2 dot 1 = 2$ assumendo logaritmo in base due. La densità misurata è $m / n = #calc.round(edge-density(mpi-random), digits: 2)$, quindi il grafo è sopra la soglia asintotica, ma la costante della `MPI_Allreduce` mantiene il loop MPI sopra la baseline sequenziale.
 
 #backend-breakdown-chart(mpi-random)
 
-== Profilo temporale del backend OpenMP
+== OpenMP - profilo temporale
 
-La run OpenMP usa #workers(openmp-random). Sul grafo `random` il tempo totale è #duration(openmp-random.total). La scansione degli archi richiede #duration(openmp-random.raw.timings.scan_seconds), mentre riduzione, contrazione e compressione rimangono nello stesso ordine di grandezza.
+La run OpenMP usa #workers(openmp-random). Sul grafo `random` il loop MST dura #duration(openmp-random.loop), mentre la baseline sequenziale CPU misurata nello stesso report dura #duration(sequential-cpu-seconds(openmp-random)).
+
+La scansione degli archi richiede #duration(openmp-random.raw.timings.scan_seconds), pari al #percent(openmp-random.raw.timings.scan_seconds, openmp-random.loop) del loop. Le fasi di riduzione, contrazione e compressione sommano #duration(openmp-random.raw.timings.reduce_seconds + openmp-random.raw.timings.contract_seconds + openmp-random.raw.timings.compress_seconds), pari al #percent(openmp-random.raw.timings.reduce_seconds + openmp-random.raw.timings.contract_seconds + openmp-random.raw.timings.compress_seconds, openmp-random.loop) del loop.
+
+Il profilo OpenMP corrisponde alla previsione di @eq:omp-time. Il termine $m / p$ della scan resta la parte dominante, mentre l'overhead strutturale su $n$ candidati resta più contenuto della collettiva MPI.
+
+La soglia teorica di @eq:omp-threshold vale $p = 4$. La densità misurata è $m / n = #calc.round(edge-density(openmp-random), digits: 2)$, quindi il grafo supera la soglia asintotica, ma lo speedup sperimentale è $T_s / T_p = #calc.round(empirical-speedup(openmp-random), digits: 2)$ e non raggiunge il pareggio.
+
+OpenMP è il backend parallelo più vicino alla baseline sequenziale sul loop MST del grafo `random`. Il confronto con MPI segue @eq:mpi-threshold e @eq:omp-threshold, perché la memoria condivisa elimina il fattore collettivo $log p$.
 
 #backend-breakdown-chart(openmp-random)
 
-== Profilo temporale del backend CUDA
+== CUDA - profilo temporale
 
-La run CUDA usa una #platform(cuda-random) con #workers(cuda-random). Sul grafo `random` il tempo totale è #duration(cuda-random.total), ma questo valore non è la somma delle barre del breakdown: le barre rappresentano solo le regioni esplicitamente strumentate, cioè copie host-device, kernel principali e copia finale verso host.
+La run CUDA usa una #platform(cuda-random) con #workers(cuda-random). Sul grafo `random` il loop MST dura #duration(cuda-random.loop), mentre la baseline sequenziale CPU misurata nello stesso report dura #duration(sequential-cpu-seconds(cuda-random)).
 
 #figure(
   table(
@@ -244,16 +407,49 @@ La run CUDA usa una #platform(cuda-random) con #workers(cuda-random). Sul grafo 
     table.header([*Voce*], [*Tempo*]),
     [Tempo totale della run], [#duration(cuda-random.total)],
     [Loop MST complessivo], [#duration(cuda-random.loop)],
+    [Verifica sequenziale CPU], [#duration(sequential-cpu-seconds(cuda-random))],
     [Sottosezioni CUDA strumentate], [#duration(profiled-seconds(cuda-random))],
-    [Setup/runtime nel loop non strumentato], [#duration(unprofiled-mst-seconds(cuda-random))],
-    [Tempo prima del loop MST], [#duration(setup-before-loop-seconds(cuda-random))],
+    [Residuo del loop non attribuito], [#duration(unprofiled-mst-seconds(cuda-random))],
+    [Tempo fuori dal loop MST], [#duration(setup-before-loop-seconds(cuda-random))],
   ),
-  caption: [Scomposizione dei tempi CUDA sul grafo `random`.]
+  caption: [Scomposizione dei tempi CUDA sul grafo `random`.],
 ) <tab:cuda-timing-gap>
 
-La differenza principale è dovuta al fatto che il timer interno non include tutta la vita del backend CUDA. In particolare, allocazioni device, inizializzazione del contesto CUDA e setup del runtime avvengono dentro il loop MST complessivo ma fuori dai timer di fase. Inoltre il tempo totale include anche la preparazione del grafo prima dell'esecuzione vera e propria dell'algoritmo.
+La tabella @tab:cuda-timing-gap separa il loop MST, la verifica sequenziale CPU e il residuo non attribuito dalla strumentazione. Le sottosezioni CUDA strumentate coprono il #percent(profiled-seconds(cuda-random), cuda-random.loop) del loop MST.
+
+Il termine dominante del profilo CUDA è il setup device registrato nel breakdown. La scansione degli archi richiede #duration(timing-value(cuda-random, "scan_seconds")), quindi il limite osservato non è il costo marginale della scan ma l'ammortamento dei costi fissi descritti dopo @eq:cuda-isoefficiency.
+
+Lo speedup sperimentale CUDA sul grafo `random` è $T_s / T_p = #calc.round(empirical-speedup(cuda-random), digits: 2)$. Il valore è inferiore a uno perché $m = #cuda-random.edges$ non è sufficiente ad ammortizzare setup, lanci kernel e copie.
 
 #backend-breakdown-chart(cuda-random)
+
+#figure(
+  table(
+    columns: (1fr, 0.8fr, 1fr, 1fr, 0.8fr),
+    align: (right, right, right, right, right),
+    table.header([*$m$*], [*$m / n$*], [*CUDA loop*], [*$T_s$ CPU*], [*$T_s / T_("CUDA")$*]),
+    ..cuda-sweep-runs
+      .map(item => (
+        [#item.edges],
+        [#calc.round(edge-density(item), digits: 2)],
+        [#duration(item.loop)],
+        [#duration(sequential-cpu-seconds(item))],
+        [#calc.round(empirical-speedup(item), digits: 2)],
+      ))
+      .flatten(),
+  ),
+  caption: [Sweep CUDA sul grafo `random` con $n$ fissato. Il tempo CUDA è il loop MST, quindi include setup device, copie e kernel, ma non la generazione del grafo.],
+) <tab:cuda-sweep>
+
+La tabella @tab:cuda-sweep conserva la sweep CUDA con $n$ fissato e $m$ crescente. Il rapporto $T_s / T_("CUDA")$ cresce con la densità e supera il pareggio nel primo punto utile a $m = #cuda-sweep-first-crossover.edges$ archi, cioè densità #calc.round(edge-density(cuda-sweep-first-crossover), digits: 1).
+
+La regressione lineare nella sweep non sostituisce il modello teorico del Capitolo 2. La regressione stima solo la soglia empirica di crossover, pari a circa #calc.round(cuda-threshold-edges / 1000000, digits: 2) milioni di archi e densità #calc.round(cuda-threshold-density, digits: 1) per $n = #cuda-sweep-runs.at(0).vertices$.
+
+La soglia empirica supporta la previsione qualitativa di @eq:cuda-overhead. CUDA diventa competitivo quando $m >> n$, perché la scan espone abbastanza parallelismo da compensare i costi fissi della GPU.
+
+#cuda-sweep-time-chart
+
+#cuda-sweep-speedup-chart
 
 == Confronto complessivo
 
@@ -261,19 +457,38 @@ La differenza principale è dovuta al fatto che il timer interno non include tut
 
 #figure(
   table(
+    columns: (0.9fr, 1fr, 1fr, 0.8fr),
+    align: (left, right, right, right),
+    table.header([*Backend*], [*Loop MST*], [*$T_s$ CPU*], [*$T_s / T_p$*]),
+    ..random-runs
+      .map(item => (
+        [#backend-label(item.backend)],
+        [#duration(item.loop)],
+        [#duration(sequential-cpu-seconds(item))],
+        [#calc.round(empirical-speedup(item), digits: 2)],
+      ))
+      .flatten(),
+  ),
+  caption: [Confronto sul grafo `random` tra il loop MST parallelo e la baseline sequenziale CPU misurata nello stesso report.],
+) <tab:random-speedup>
+
+#figure(
+  table(
     columns: (0.9fr, 0.9fr, 0.9fr, 0.9fr, 0.8fr, 0.8fr),
     align: (left, left, right, right, right, right),
     table.header([*Backend*], [*Grafo*], [*Vertici*], [*Archi*], [*Round*], [*Totale*]),
-    ..reports.map(item => (
-      [#backend-label(item.backend)],
-      [#graph-label(item.graph)],
-      [#item.vertices],
-      [#item.edges],
-      [#item.rounds],
-      [#duration(item.total)],
-    )).flatten()
+    ..reports
+      .map(item => (
+        [#backend-label(item.backend)],
+        [#graph-label(item.graph)],
+        [#item.vertices],
+        [#item.edges],
+        [#item.rounds],
+        [#duration(item.total)],
+      ))
+      .flatten(),
   ),
-  caption: [Tempi totali per tutte le combinazioni backend-grafo disponibili.]
+  caption: [Tempi totali per tutte le combinazioni backend-grafo disponibili.],
 ) <tab:all-times>
 
 #figure(
@@ -281,21 +496,35 @@ La differenza principale è dovuta al fatto che il timer interno non include tut
     columns: (0.9fr, 0.9fr, 1fr, 1fr, 1fr),
     align: (left, left, right, right, center),
     table.header([*Backend*], [*Grafo*], [*Peso MST*], [*Archi MST*], [*Verifica*]),
-    ..reports.map(item => (
-      [#backend-label(item.backend)],
-      [#graph-label(item.graph)],
-      [#item.weight],
-      [#item.mst_edges],
-      [#if item.verified [ok] else [fallita]],
-    )).flatten()
+    ..reports
+      .map(item => (
+        [#backend-label(item.backend)],
+        [#graph-label(item.graph)],
+        [#item.weight],
+        [#item.mst_edges],
+        [#if item.verified [ok] else [fallita]],
+      ))
+      .flatten(),
   ),
-  caption: [Verifica dei risultati rispetto al verificatore sequenziale CPU.]
+  caption: [Verifica dei risultati rispetto al verificatore sequenziale CPU.],
 ) <tab:verification>
 
-Sul grafo `random`, nei report disponibili MPI è il backend più veloce, seguito da CUDA e poi da OpenMP. Questo risultato non va interpretato come una proprietà generale dell'algoritmo: misura una specifica implementazione, una specifica macchina e una sola configurazione per backend. La differenza più evidente è che OpenMP e CUDA mostrano costi fissi visibili anche sui grafi piccoli, mentre MPI ottiene tempi molto bassi già con due processi sul nodo usato.
+La tabella @tab:random-speedup confronta il loop MST dei tre backend con la baseline sequenziale CPU misurata nello stesso report. Nessun backend parallelo supera la baseline sul grafo `random`, perché tutti i rapporti $T_s / T_p$ sono inferiori a uno.
 
-= Considerazioni conclusive
+La tabella @tab:all-times conserva i tempi complessivi per tutte le combinazioni backend-grafo disponibili. I grafi piccoli favoriscono MPI e OpenMP rispetto a CUDA perché evitano i costi fissi di setup device.
 
-Il progetto mostra che Boruvka si presta naturalmente alla parallelizzazione della scansione degli archi e della riduzione dei candidati. La parte più delicata non è la correttezza teorica dell'algoritmo, ma la gestione dei costi di coordinazione introdotti dai backend. MPI mette in evidenza il costo della comunicazione collettiva, OpenMP quello delle sincronizzazioni e delle strutture locali per thread, CUDA quello dei lanci kernel e della gestione della memoria device.
+La tabella @tab:verification conserva la verifica di correttezza. Tutte le run riportano esito `ok`, quindi il confronto temporale riguarda implementazioni che producono lo stesso MST del verificatore sequenziale CPU.
 
-Per rendere l'analisi sperimentale più completa servirebbero run su scala più ampia: più processi MPI, più thread OpenMP, dimensioni crescenti per il grafo `random` e una baseline sequenziale temporizzata nello stesso formato dei report prodotti dai backend. Con questi dati sarebbe possibile calcolare speedup ed efficienza sperimentali, oltre alla sola analisi teorica e al confronto relativo tra backend.
+Il confronto complessivo segue il modello del Capitolo 2. MPI scala peggio di OpenMP per il termine collettivo di @eq:mpi-time, mentre CUDA si avvicina al regime favorevole solo nella sweep a densità crescente.
+
+= Capitolo 5 - Conclusioni
+
+Il modello teorico prevede che OpenMP abbia una soglia migliore di MPI per lo stesso numero di worker. Il confronto sul grafo `random` misura #duration(openmp-random.loop) per OpenMP e #duration(mpi-random.loop) per MPI, quindi OpenMP è circa #calc.round(mpi-random.loop / openmp-random.loop, digits: 1) volte più rapido sul loop MST.
+
+Il modello teorico prevede che CUDA sia favorevole per $m >> n$. La sweep CUDA supera il pareggio a $m = #cuda-sweep-first-crossover.edges$ archi con $T_s / T_("CUDA") = #calc.round(empirical-speedup(cuda-sweep-first-crossover), digits: 2)$, mentre la soglia stimata dalla regressione è circa #calc.round(cuda-threshold-edges / 1000000, digits: 2) milioni di archi.
+
+Nessun backend parallelo supera la baseline sequenziale sul grafo `random`. Questo risultato non contraddice @eq:mpi-threshold, @eq:omp-threshold o @eq:cuda-isoefficiency, perché le soglie asintotiche indicano quando l'overhead può essere ammortizzato in ordine di grandezza e non quando le costanti implementative producono speedup reale.
+
+Per MPI, la densità $m / n = #calc.round(edge-density(mpi-random), digits: 2)$ è sopra la soglia $p dot log p = 2$, ma la `MPI_Allreduce` costa #duration(mpi-random.raw.timings.max_reduce_seconds) e rappresenta il #percent(mpi-random.raw.timings.max_reduce_seconds, mpi-random.loop) del loop. Per OpenMP, la stessa densità è sopra la soglia $p = 4$, ma lo speedup sul loop è #calc.round(empirical-speedup(openmp-random), digits: 2).
+
+Il prossimo esperimento utile per CUDA deve ripetere i punti oltre il pareggio con più repliche. Le densità 80, 88, 96, 112 e 128 mostrano il regime di crossover, ma servono repliche per separare trend e rumore di scheduling.

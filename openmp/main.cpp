@@ -187,9 +187,12 @@ int main() {
             << " threads\n";
   std::cout << mst::core::mst_summary(mst_edges, total_weight);
   mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
+  const auto verification_start = clock::now();
   const mst::boruvka::verification_result verification =
       mst::boruvka::verify_against_sequential_cpu(graph, mst_edges,
                                                   total_weight);
+  const double verification_seconds =
+      std::chrono::duration<double>(clock::now() - verification_start).count();
   if (verification.success) {
     std::cout << "Sequential CPU verification: passed\n";
   } else {
@@ -209,6 +212,8 @@ int main() {
   report << "  \"timings\": {\n";
   report << "    \"total_seconds\": " << total_seconds << ",\n";
   report << "    \"mst_loop_seconds\": " << mst_loop_seconds << ",\n";
+  report << "    \"sequential_cpu_verification_seconds\": "
+         << verification_seconds << ",\n";
   report << "    \"scan_seconds\": " << profile.scan_seconds << ",\n";
   report << "    \"reduce_seconds\": " << profile.reduce_seconds << ",\n";
   report << "    \"contract_seconds\": " << profile.contract_seconds << ",\n";
