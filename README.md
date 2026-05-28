@@ -32,8 +32,9 @@ cmake --build --preset default
 Recreate the local CMake build tree when cache state needs to be discarded:
 
 ```bash
-cmake --fresh --preset recreate
-cmake --build --preset recreate
+rm -rf build
+cmake --preset default
+cmake --build --preset default
 ```
 
 Run OpenMP:
@@ -56,6 +57,27 @@ cmake --build --preset default --target cuda_app
 ./build/cuda/cuda_app
 ```
 
+Run tests:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Select input graphs with `MST_GRAPH`. Available values are `test`,
+`triangle`, `square`, `tie`, `dense16`, and `random`. The random graph defaults
+to 32,768 vertices and 196,608 extra edges:
+
+```bash
+MST_GRAPH=random MST_RANDOM_VERTICES=32768 MST_RANDOM_EXTRA_EDGES=196608 \
+  MST_RANDOM_SEED=886261 MST_RANDOM_MAX_WEIGHT=10000 ./build/openmp/openmp_app
+```
+
+Set `MST_REPORT_PATH` to write JSON timing reports:
+
+```bash
+MST_GRAPH=tie MST_REPORT_PATH=results/openmp_tie.json ./build/openmp/openmp_app
+```
+
 The top-level Makefile is a compatibility wrapper. On a machine with CMake and
 Ninja, `make all`, `make openmp`, `make mpi`, and `make cuda` delegate to the
 CMake presets. On the Slurm environment where CMake/Ninja are unavailable, use
@@ -65,6 +87,13 @@ the direct fallback rules:
 make USE_CMAKE=OFF openmp CXX=g++
 make USE_CMAKE=OFF mpi MPICXX=mpicxx
 make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
+```
+
+Submit the Slurm benchmark matrix for all named graphs plus the large random
+graph:
+
+```bash
+scripts/slurm/submit_all.sh
 ```
 
 Zed tasks should use the CMake preset path locally.

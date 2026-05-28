@@ -12,11 +12,16 @@ struct edge {
   vertex_id u;
   vertex_id v;
   edge_weight weight;
+
+  friend constexpr bool operator==(edge lhs, edge rhs) noexcept {
+    return lhs.u == rhs.u && lhs.v == rhs.v && lhs.weight == rhs.weight;
+  }
 };
 
 /// Candidate edge proposed by a component before union validation.
 struct candidate_edge {
   edge value;
+  edge_index index = make_edge_index(0);
 };
 
 /// Edge admitted into the MST by a successful union.
@@ -25,6 +30,10 @@ struct mst_edge {
 };
 
 using maybe_candidate_edge = std::optional<candidate_edge>;
+
+inline constexpr candidate_key key_for(candidate_edge candidate) noexcept {
+  return make_candidate_key(candidate.value.weight, candidate.index);
+}
 
 inline constexpr std::pair<int, int>
 normalized_endpoints(edge edge_value) noexcept {
@@ -44,14 +53,24 @@ inline constexpr bool better_candidate(maybe_candidate_edge lhs,
   if (!lhs) {
     return false;
   }
-  if (lhs->value.weight != rhs->value.weight) {
-    return lhs->value.weight < rhs->value.weight;
+  const candidate_key lhs_key = key_for(*lhs);
+  const candidate_key rhs_key = key_for(*rhs);
+  if (lhs_key != rhs_key) {
+    return lhs_key < rhs_key;
   }
   return normalized_endpoints(lhs->value) < normalized_endpoints(rhs->value);
 }
 
 inline void consider_candidate(maybe_candidate_edge &current, edge next) {
   const maybe_candidate_edge candidate = candidate_edge{next};
+  if (better_candidate(candidate, current)) {
+    current = candidate;
+  }
+}
+
+inline void consider_candidate(maybe_candidate_edge &current, edge next,
+                               edge_index index) {
+  const maybe_candidate_edge candidate = candidate_edge{next, index};
   if (better_candidate(candidate, current)) {
     current = candidate;
   }

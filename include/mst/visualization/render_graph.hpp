@@ -428,6 +428,17 @@ inline void
 render_graph_with_mst(const mst::core::validated_graph &graph,
                       const std::vector<mst::core::mst_edge> &mst_edges,
                       int total_weight, std::ostream &out = std::cout) {
+  constexpr int max_rendered_vertices = 128;
+  constexpr std::size_t max_rendered_edges = 1024;
+  if (graph.vertex_count() > max_rendered_vertices ||
+      graph.edges().size() > max_rendered_edges) {
+    out << "Graph visualization skipped for large graph: vertices = "
+        << graph.vertex_count() << ", edges = " << graph.edges().size()
+        << ", MST weight = " << total_weight
+        << ", MST edges = " << mst_edges.size() << '\n';
+    return;
+  }
+
   const viewport_size terminal = detect_viewport_size();
   const int width = std::clamp(terminal.width - 2, 96, 180);
   const int height = std::clamp(terminal.height - 8, 28, 60);

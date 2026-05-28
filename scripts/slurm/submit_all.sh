@@ -11,13 +11,27 @@ make -C "$REPO_DIR" clean
 
 cd "$EXPERIMENT_DIR"
 
-openmp_job_id="$(sbatch --parsable "$REPO_DIR/scripts/slurm/openmp.sh")"
-mpi_job_id="$(sbatch --parsable "$REPO_DIR/scripts/slurm/mpi.sh")"
-cuda_job_id="$(sbatch --parsable "$REPO_DIR/scripts/slurm/cuda.sh")"
+graph_list="${MST_GRAPHS:-test,triangle,square,tie,dense16,random}"
+export MST_GRAPHS="$graph_list"
+
+openmp_job_id="$(
+  sbatch --parsable --export=ALL \
+    "$REPO_DIR/scripts/slurm/openmp.sh"
+)"
+mpi_job_id="$(
+  sbatch --parsable --export=ALL \
+    "$REPO_DIR/scripts/slurm/mpi.sh"
+)"
+cuda_job_id="$(
+  sbatch --parsable --export=ALL \
+    "$REPO_DIR/scripts/slurm/cuda.sh"
+)"
 
 printf '%s\n' \
-  "Submitted OpenMP job: $openmp_job_id" \
-  "Submitted MPI job: $mpi_job_id" \
-  "Submitted CUDA job: $cuda_job_id" \
+  "Submitted OpenMP graphs=[$graph_list] job: $openmp_job_id" \
+  "Submitted MPI graphs=[$graph_list] job: $mpi_job_id" \
+  "Submitted CUDA graphs=[$graph_list] job: $cuda_job_id"
+
+printf '%s\n' \
   "Logs: $EXPERIMENT_DIR/job_logs" \
   "Results: $EXPERIMENT_DIR/results"
