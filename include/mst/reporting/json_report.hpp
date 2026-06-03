@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -13,6 +14,16 @@
 #include <unistd.h>
 
 namespace mst::reporting {
+
+struct phase_timing_profile {
+  double total_seconds = 0.0;
+  double mst_loop_seconds = 0.0;
+  double sequential_cpu_verification_seconds = 0.0;
+  double scan_seconds = 0.0;
+  double reduce_seconds = 0.0;
+  double contract_seconds = 0.0;
+  double compress_seconds = 0.0;
+};
 
 inline std::string json_escape(std::string_view value) {
   std::string escaped;
@@ -106,16 +117,25 @@ inline std::string common_metadata_json(std::string_view backend,
   return out.str();
 }
 
-inline std::string report_path_or_empty() {
-  return env_or_empty("MST_REPORT_PATH");
-}
-
-inline bool write_report_from_env(std::string_view report) {
-  const std::string path = report_path_or_empty();
-  if (path.empty()) {
-    return false;
+inline void write_phase_timings_json(std::ostream &out,
+                                     const phase_timing_profile &timings,
+                                     std::string_view backend_fields = {}) {
+  out << "  \"timings\": {\n";
+  out << "    \"total_seconds\": " << timings.total_seconds << ",\n";
+  out << "    \"mst_loop_seconds\": " << timings.mst_loop_seconds << ",\n";
+  out << "    \"sequential_cpu_verification_seconds\": "
+      << timings.sequential_cpu_verification_seconds << ",\n";
+  out << "    \"scan_seconds\": " << timings.scan_seconds << ",\n";
+  out << "    \"reduce_seconds\": " << timings.reduce_seconds << ",\n";
+  out << "    \"contract_seconds\": " << timings.contract_seconds << ",\n";
+  out << "    \"compress_seconds\": " << timings.compress_seconds;
+  if (!backend_fields.empty()) {
+    out << ",\n";
+    out << backend_fields;
+  } else {
+    out << "\n";
   }
-  return write_report(path, report);
+  out << "  }";
 }
 
 } // namespace mst::reporting

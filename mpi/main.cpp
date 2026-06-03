@@ -1,23 +1,39 @@
 #include <mpi.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
 #include <vector>
 
-#include "mst/app/graph_selection.hpp"
+#include "mst/app/backend_app.hpp"
 #include "mst/boruvka/sequential_verifier.hpp"
 #include "mst/core/edge.hpp"
 #include "mst/core/graph.hpp"
-#include "mst/core/summary.hpp"
 #include "mst/dsu/disjoint_set.hpp"
 #include "mst/execution/domain.hpp"
 #include "mst/reporting/json_report.hpp"
-#include "mst/visualization/render_graph.hpp"
 
 namespace mst::backend::mpi {
 
 constexpr int root_rank = 0;
+
+struct mpi_workspace {
+  explicit mpi_workspace(int vertex_count)
+      : local_keys(static_cast<std::size_t>(vertex_count),
+                   mst::core::empty_candidate_key.value()),
+        reduced_keys(static_cast<std::size_t>(vertex_count),
+                     mst::core::empty_candidate_key.value()) {}
+
+  void reset_local() {
+    std::fill(local_keys.begin(), local_keys.end(),
+              mst::core::empty_candidate_key.value());
+  }
+
+  std::vector<std::uint64_t> local_keys;
+  std::vector<std::uint64_t> reduced_keys;
+};
 
 int edge_begin_for_rank(int edge_count, int rank, int size) {
   return (edge_count * rank) / size;
@@ -45,13 +61,10 @@ mst::dsu::parent_snapshot unpack_snapshot(const std::vector<int> &packed) {
   return mst::dsu::parent_snapshot{std::move(parent)};
 }
 
-std::vector<mst::core::maybe_candidate_edge> local_best_candidates(
+void local_best_candidate_keys(
     const mst::core::validated_graph &graph,
     mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu, int begin,
-    int end) {
-  std::vector<mst::core::maybe_candidate_edge> best(
-      static_cast<std::size_t>(graph.vertex_count()));
-
+    int end, std::vector<std::uint64_t> &best_keys) {
   for (int index = begin; index < end; ++index) {
     const mst::core::edge &edge =
         graph.edges()[static_cast<std::size_t>(index)];
@@ -63,11 +76,13 @@ std::vector<mst::core::maybe_candidate_edge> local_best_candidates(
 
     const mst::core::edge_index edge_index =
         mst::core::make_edge_index(static_cast<std::size_t>(index));
-    mst::core::consider_candidate(best[left_root.index()], edge, edge_index);
-    mst::core::consider_candidate(best[right_root.index()], edge, edge_index);
+    const std::uint64_t key =
+        mst::core::make_candidate_key(edge.weight, edge_index).value();
+    auto &left_candidate = best_keys[left_root.index()];
+    auto &right_candidate = best_keys[right_root.index()];
+    left_candidate = std::min(left_candidate, key);
+    right_candidate = std::min(right_candidate, key);
   }
-
-  return best;
 }
 
 mst::execution::mpi_round<mst::execution::parents_broadcasted>
@@ -80,72 +95,51 @@ broadcast_parents(mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
   return {};
 }
 
-std::vector<mst::core::maybe_candidate_edge> compute_local_minima(
+const std::vector<std::uint64_t> &compute_local_minima(
     const mst::core::validated_graph &graph,
     mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
-    int edge_begin, int edge_end,
+    int edge_begin, int edge_end, mpi_workspace &workspace,
     mst::execution::mpi_round<mst::execution::parents_broadcasted>) {
-  return local_best_candidates(graph, dsu, edge_begin, edge_end);
+  workspace.reset_local();
+  local_best_candidate_keys(graph, dsu, edge_begin, edge_end,
+                            workspace.local_keys);
+  return workspace.local_keys;
 }
 
-std::vector<mst::core::maybe_candidate_edge> reduce_minima(
-    const std::vector<mst::core::maybe_candidate_edge> &local,
+const std::vector<std::uint64_t> &reduce_minima(
+    const std::vector<std::uint64_t> &local_keys, mpi_workspace &workspace,
     const mst::core::validated_graph &graph, MPI_Comm comm,
     mst::execution::mpi_round<mst::execution::local_minima_computed>) {
   const int vertex_count = graph.vertex_count();
-  std::vector<std::uint64_t> local_keys(
-      static_cast<std::size_t>(vertex_count),
-      mst::core::empty_candidate_key.value());
-  for (int component = 0; component < vertex_count; ++component) {
-    const auto &candidate = local[static_cast<std::size_t>(component)];
-    if (!candidate) {
-      continue;
-    }
-    local_keys[static_cast<std::size_t>(component)] =
-        mst::core::key_for(*candidate).value();
-  }
-
-  std::vector<std::uint64_t> reduced_keys(
-      static_cast<std::size_t>(vertex_count),
-      mst::core::empty_candidate_key.value());
-  MPI_Allreduce(local_keys.data(), reduced_keys.data(), vertex_count,
+  MPI_Allreduce(local_keys.data(), workspace.reduced_keys.data(), vertex_count,
                 MPI_UINT64_T, MPI_MIN, comm);
 
-  std::vector<mst::core::maybe_candidate_edge> best(
-      static_cast<std::size_t>(vertex_count));
-  for (int component = 0; component < vertex_count; ++component) {
-    const mst::core::candidate_key key{
-        reduced_keys[static_cast<std::size_t>(component)]};
-    if (key == mst::core::empty_candidate_key) {
-      continue;
-    }
-    const mst::core::edge_index edge_index =
-        mst::core::edge_index_from_candidate_key(key);
-    const mst::core::edge edge =
-        graph.edges()[static_cast<std::size_t>(edge_index.value())];
-    best[static_cast<std::size_t>(component)] =
-        mst::core::candidate_edge{edge, edge_index};
-  }
-
-  return best;
+  return workspace.reduced_keys;
 }
 
-bool apply_contractions(
-    const std::vector<mst::core::maybe_candidate_edge> &best,
+int apply_contractions(
+    const std::vector<std::uint64_t> &best_keys,
+    const mst::core::validated_graph &graph,
     mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
     std::vector<mst::core::mst_edge> &mst_edges, int &total_weight) {
-  bool changed = false;
-  for (const auto &candidate : best) {
-    if (!candidate) {
+  int admitted_count = 0;
+  for (const std::uint64_t key_value : best_keys) {
+    if (key_value == mst::core::empty_candidate_key.value()) {
       continue;
     }
-    if (auto admitted = dsu.unite(*candidate)) {
+    const mst::core::candidate_key key{key_value};
+    const mst::core::edge_index edge_index =
+        mst::core::edge_index_from_candidate_key(key);
+    const mst::core::candidate_edge candidate{
+        graph.edges()[static_cast<std::size_t>(edge_index.value())],
+        edge_index};
+    if (auto admitted = dsu.unite(candidate)) {
       mst_edges.push_back(*admitted);
       total_weight += admitted->value.weight.value();
-      changed = true;
+      ++admitted_count;
     }
   }
-  return changed;
+  return admitted_count;
 }
 
 } // namespace mst::backend::mpi
@@ -160,48 +154,60 @@ int main(std::int32_t argc, char **argv) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  const mst::app::selected_graph selected = mst::app::select_graph_from_env();
-  const mst::core::validated_graph graph =
-      mst::core::validate(selected.graph);
+  const mst::app::config_parse_result parsed =
+      mst::app::parse_app_config(argc, argv);
+  if (!parsed.success || parsed.help_requested) {
+    int config_exit_code = EXIT_FAILURE;
+    if (rank == root_rank) {
+      mst::app::handle_config_parse_result(parsed, argv[0],
+                                           config_exit_code);
+    } else {
+      config_exit_code = parsed.help_requested ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    MPI_Finalize();
+    return config_exit_code;
+  }
+  const mst::app::app_config &config = parsed.config;
+
+  const double total_start = MPI_Wtime();
+  const mst::app::loaded_graph loaded = mst::app::load_graph(config);
+  const mst::app::selected_graph &selected = loaded.selected;
+  const mst::core::validated_graph &graph = loaded.graph;
   mst::dsu::disjoint_set<mst::core::uncompressed_parents> dsu(
       graph.vertex_count());
   std::vector<mst::core::mst_edge> mst_edges;
   int total_weight = 0;
   int rounds = 0;
+  int remaining_components = graph.vertex_count();
+  mpi_workspace workspace(graph.vertex_count());
   double local_compute_seconds = 0.0;
   double reduce_seconds = 0.0;
   double contract_seconds = 0.0;
-  const double total_start = MPI_Wtime();
   const double mst_start = MPI_Wtime();
 
-  while (true) {
-    if (dsu.component_count() <= 1) {
-      break;
-    }
-
+  while (remaining_components > 1) {
     ++rounds;
     const int begin =
         edge_begin_for_rank(static_cast<int>(graph.edges().size()), rank, size);
     const int end =
         edge_end_for_rank(static_cast<int>(graph.edges().size()), rank, size);
     const double local_compute_start = MPI_Wtime();
-    const auto local =
-        compute_local_minima(graph, dsu, begin, end, {});
+    const std::vector<std::uint64_t> &local =
+        compute_local_minima(graph, dsu, begin, end, workspace, {});
     local_compute_seconds += MPI_Wtime() - local_compute_start;
 
     const double reduce_start = MPI_Wtime();
-    const auto reduced = reduce_minima(local, graph, MPI_COMM_WORLD, {});
+    const std::vector<std::uint64_t> &reduced =
+        reduce_minima(local, workspace, graph, MPI_COMM_WORLD, {});
     reduce_seconds += MPI_Wtime() - reduce_start;
 
     const double contract_start = MPI_Wtime();
-    const int local_continue =
-        apply_contractions(reduced, dsu, mst_edges, total_weight) ? 1 : 0;
+    const int admitted_count =
+        apply_contractions(reduced, graph, dsu, mst_edges, total_weight);
     contract_seconds += MPI_Wtime() - contract_start;
+    remaining_components -= admitted_count;
 
-    int continue_flag = 0;
-    MPI_Allreduce(&local_continue, &continue_flag, 1, MPI_INT, MPI_MAX,
-                  MPI_COMM_WORLD);
-    if (continue_flag == 0) {
+    if (admitted_count == 0) {
       break;
     }
   }
@@ -243,9 +249,8 @@ int main(std::int32_t argc, char **argv) {
   MPI_Get_processor_name(processor_name, &processor_name_length);
 
   if (rank == root_rank) {
-    std::cout << "MPI Boruvka MST\n";
-    std::cout << mst::core::mst_summary(mst_edges, total_weight);
-    mst::visualization::render_graph_with_mst(graph, mst_edges, total_weight);
+    mst::app::print_result("MPI Boruvka MST", config, graph, mst_edges,
+                           total_weight);
     if (all_verification_success != 0) {
       std::cout << "Sequential CPU verification: passed\n";
     } else {
@@ -264,19 +269,26 @@ int main(std::int32_t argc, char **argv) {
                   "mpi", all_verification_success != 0)
            << ",\n";
     report << mst::app::graph_metadata_json(selected) << ",\n";
-    report << "  \"timings\": {\n";
-    report << "    \"total_seconds\": " << (total_end - total_start) << ",\n";
-    report << "    \"mst_loop_seconds\": " << (mst_end - mst_start) << ",\n";
-    report << "    \"sequential_cpu_verification_seconds\": "
-           << max_verification_seconds << ",\n";
-    report << "    \"max_local_compute_seconds\": " << max_local_compute_seconds
-           << ",\n";
-    report << "    \"avg_local_compute_seconds\": " << avg_local_compute_seconds
-           << ",\n";
-    report << "    \"max_reduce_seconds\": " << max_reduce_seconds << ",\n";
-    report << "    \"max_contract_seconds\": " << max_contract_seconds
-           << "\n";
-    report << "  },\n";
+    report << mst::app::configuration_metadata_json(config) << ",\n";
+    std::ostringstream backend_timing_fields;
+    backend_timing_fields << "    \"backend\": {\n";
+    backend_timing_fields << "      \"max_scan_seconds\": "
+                          << max_local_compute_seconds << ",\n";
+    backend_timing_fields << "      \"avg_scan_seconds\": "
+                          << avg_local_compute_seconds << "\n";
+    backend_timing_fields << "    }\n";
+    mst::reporting::write_phase_timings_json(
+        report, mst::reporting::phase_timing_profile{
+                    total_end - total_start,
+                    mst_end - mst_start,
+                    max_verification_seconds,
+                    max_local_compute_seconds,
+                    max_reduce_seconds,
+                    max_contract_seconds,
+                    0.0,
+                },
+        backend_timing_fields.str());
+    report << ",\n";
     report << "  \"capabilities\": {\n";
     report << "    \"world_size\": " << size << ",\n";
     report << "    \"mpi_version_major\": " << version << ",\n";
@@ -287,17 +299,13 @@ int main(std::int32_t argc, char **argv) {
                               static_cast<std::size_t>(processor_name_length)))
            << "\"\n";
     report << "  },\n";
-    report << "  \"mst\": {\n";
-    report << "    \"vertex_count\": " << graph.vertex_count() << ",\n";
-    report << "    \"input_edge_count\": " << graph.edges().size() << ",\n";
-    report << "    \"selected_edge_count\": " << mst_edges.size() << ",\n";
-    report << "    \"rounds\": " << rounds << ",\n";
-    report << "    \"total_weight\": " << total_weight << "\n";
-    report << "  },\n";
+    report << mst::app::mst_metadata_json(graph, mst_edges.size(), rounds,
+                                          total_weight)
+           << ",\n";
     mst::boruvka::write_verification_json(report, verification);
     report << "\n";
     report << "}\n";
-    mst::reporting::write_report_from_env(report.str());
+    mst::app::write_report_if_requested(config, report.str());
   }
 
   MPI_Finalize();

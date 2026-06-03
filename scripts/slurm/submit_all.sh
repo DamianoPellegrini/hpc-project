@@ -11,8 +11,8 @@ make -C "$REPO_DIR" clean
 
 cd "$EXPERIMENT_DIR"
 
-graph_list="${MST_GRAPHS:-test,triangle,square,tie,dense16,random}"
-export MST_GRAPHS="$graph_list"
+graph_list="${GRAPHS:-test,triangle,square,tie,dense16,random}"
+export GRAPHS="$graph_list"
 
 openmp_job_id="$(
   sbatch --parsable --export=ALL \

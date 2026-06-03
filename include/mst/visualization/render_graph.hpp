@@ -330,7 +330,6 @@ inline void draw_padded_text(canvas &target, int center_x, int center_y,
 inline void draw_edge_weight(canvas &target, const canvas_point &from,
                              const canvas_point &to, int weight,
                              int horizontal_padding, const char *color) {
-  const double dy = static_cast<double>(to.y - from.y);
   const double midpoint_x = (static_cast<double>(from.x) + to.x) * 0.5;
   const double midpoint_y = (static_cast<double>(from.y) + to.y) * 0.5;
   const std::string label = std::to_string(weight);

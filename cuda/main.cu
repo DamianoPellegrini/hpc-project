@@ -10,14 +10,11 @@
 #include <string>
 #include <vector>
 
-#include "mst/app/graph_selection.hpp"
+#include "mst/app/backend_app.hpp"
 #include "mst/boruvka/sequential_verifier.hpp"
 #include "mst/core/edge.hpp"
 #include "mst/core/graph.hpp"
-#include "mst/core/summary.hpp"
-#include "mst/memory/buffer.hpp"
 #include "mst/reporting/json_report.hpp"
-#include "mst/visualization/render_graph.hpp"
 #include "cuda/boruvka_kernels.cuh"
 
 namespace mst::backend::cuda_backend {
@@ -36,6 +33,7 @@ struct cuda_profile {
   double contract_seconds = 0.0;
   double compress_seconds = 0.0;
   double device_to_host_seconds = 0.0;
+  std::string host_edge_memory_mode = "unknown";
 };
 
 struct cuda_result {
@@ -72,12 +70,213 @@ private:
   cudaEvent_t event_ = nullptr;
 };
 
+enum class cuda_host_edge_memory_preference {
+  pageable,
+  pinned,
+  mapped_zero_copy,
+};
+
+enum class cuda_host_edge_memory_mode {
+  pageable,
+  pinned,
+  mapped_zero_copy,
+};
+
+const char *cuda_host_edge_memory_mode_name(
+    cuda_host_edge_memory_mode mode) noexcept {
+  switch (mode) {
+  case cuda_host_edge_memory_mode::pageable:
+    return "pageable";
+  case cuda_host_edge_memory_mode::pinned:
+    return "pinned";
+  case cuda_host_edge_memory_mode::mapped_zero_copy:
+    return "mapped_zero_copy";
+  }
+  return "unknown";
+}
+
+cuda_host_edge_memory_preference host_edge_memory_preference_from_config(
+    mst::app::cuda_host_memory_mode mode) {
+  switch (mode) {
+  case mst::app::cuda_host_memory_mode::pageable:
+    return cuda_host_edge_memory_preference::pageable;
+  case mst::app::cuda_host_memory_mode::pinned:
+    return cuda_host_edge_memory_preference::pinned;
+  case mst::app::cuda_host_memory_mode::mapped_zero_copy:
+    return cuda_host_edge_memory_preference::mapped_zero_copy;
+  }
+  return cuda_host_edge_memory_preference::pinned;
+}
+
+void enable_mapped_host_memory_if_requested(
+    cuda_host_edge_memory_preference preference) {
+  if (preference != cuda_host_edge_memory_preference::mapped_zero_copy) {
+    return;
+  }
+
+  const cudaError_t status = cudaSetDeviceFlags(cudaDeviceMapHost);
+  if (status == cudaSuccess || status == cudaErrorSetOnActiveProcess) {
+    if (status == cudaErrorSetOnActiveProcess) {
+      cudaGetLastError();
+    }
+    return;
+  }
+  cudaGetLastError();
+}
+
 double elapsed_seconds(cudaEvent_t start, cudaEvent_t stop) {
   float milliseconds = 0.0f;
   check_cuda(cudaEventElapsedTime(&milliseconds, start, stop),
              "measuring CUDA event elapsed time failed");
   return static_cast<double>(milliseconds) / 1000.0;
 }
+
+class host_edge_storage {
+public:
+  host_edge_storage() = default;
+
+  host_edge_storage(const host_edge_storage &) = delete;
+  host_edge_storage &operator=(const host_edge_storage &) = delete;
+
+  host_edge_storage(host_edge_storage &&other) noexcept
+      : pageable_edges_(std::move(other.pageable_edges_)),
+        host_edges_(other.host_edges_),
+        mapped_device_edges_(other.mapped_device_edges_), size_(other.size_),
+        mode_(other.mode_) {
+    other.host_edges_ = nullptr;
+    other.mapped_device_edges_ = nullptr;
+    other.size_ = 0;
+  }
+
+  host_edge_storage &operator=(host_edge_storage &&other) noexcept {
+    if (this == &other) {
+      return *this;
+    }
+    release();
+    pageable_edges_ = std::move(other.pageable_edges_);
+    host_edges_ = other.host_edges_;
+    mapped_device_edges_ = other.mapped_device_edges_;
+    size_ = other.size_;
+    mode_ = other.mode_;
+    other.host_edges_ = nullptr;
+    other.mapped_device_edges_ = nullptr;
+    other.size_ = 0;
+    return *this;
+  }
+
+  ~host_edge_storage() { release(); }
+
+  static host_edge_storage
+  make(const mst::core::validated_graph &graph,
+       cuda_host_edge_memory_preference preference) {
+    host_edge_storage storage;
+    storage.size_ = graph.edges().size();
+
+    if (preference == cuda_host_edge_memory_preference::mapped_zero_copy &&
+        storage.try_allocate_cuda_host(
+            cudaHostAllocMapped,
+            cuda_host_edge_memory_mode::mapped_zero_copy)) {
+      storage.fill(graph);
+      return storage;
+    }
+
+    if (preference != cuda_host_edge_memory_preference::pageable &&
+        storage.try_allocate_cuda_host(cudaHostAllocDefault,
+                                       cuda_host_edge_memory_mode::pinned)) {
+      storage.fill(graph);
+      return storage;
+    }
+
+    storage.pageable_edges_.resize(storage.size_);
+    storage.mode_ = cuda_host_edge_memory_mode::pageable;
+    storage.fill(graph);
+    return storage;
+  }
+
+  const device_edge *host_data() const noexcept {
+    if (host_edges_ != nullptr) {
+      return host_edges_;
+    }
+    return pageable_edges_.data();
+  }
+
+  device_edge *host_data() noexcept {
+    if (host_edges_ != nullptr) {
+      return host_edges_;
+    }
+    return pageable_edges_.data();
+  }
+
+  const device_edge *mapped_device_data() const noexcept {
+    return mapped_device_edges_;
+  }
+
+  std::size_t size() const noexcept { return size_; }
+
+  bool uses_mapped_zero_copy() const noexcept {
+    return mode_ == cuda_host_edge_memory_mode::mapped_zero_copy;
+  }
+
+  const char *mode_name() const noexcept {
+    return cuda_host_edge_memory_mode_name(mode_);
+  }
+
+private:
+  bool try_allocate_cuda_host(unsigned int flags,
+                              cuda_host_edge_memory_mode mode) {
+    if (size_ == 0) {
+      mode_ = mode;
+      return true;
+    }
+
+    void *raw = nullptr;
+    const cudaError_t status =
+        cudaHostAlloc(&raw, sizeof(device_edge) * size_, flags);
+    if (status != cudaSuccess) {
+      cudaGetLastError();
+      return false;
+    }
+
+    host_edges_ = static_cast<device_edge *>(raw);
+    mode_ = mode;
+
+    if (mode_ == cuda_host_edge_memory_mode::mapped_zero_copy) {
+      device_edge *device_pointer = nullptr;
+      const cudaError_t map_status =
+          cudaHostGetDevicePointer(&device_pointer, host_edges_, 0);
+      if (map_status != cudaSuccess) {
+        cudaGetLastError();
+        release();
+        return false;
+      }
+      mapped_device_edges_ = device_pointer;
+    }
+
+    return true;
+  }
+
+  void fill(const mst::core::validated_graph &graph) {
+    device_edge *target = host_data();
+    for (std::size_t index = 0; index < graph.edges().size(); ++index) {
+      const mst::core::edge &edge = graph.edges()[index];
+      target[index] = {edge.u.value(), edge.v.value(), edge.weight.value()};
+    }
+  }
+
+  void release() noexcept {
+    if (host_edges_ != nullptr) {
+      cudaFreeHost(host_edges_);
+      host_edges_ = nullptr;
+      mapped_device_edges_ = nullptr;
+    }
+  }
+
+  std::vector<device_edge> pageable_edges_;
+  device_edge *host_edges_ = nullptr;
+  device_edge *mapped_device_edges_ = nullptr;
+  std::size_t size_ = 0;
+  cuda_host_edge_memory_mode mode_ = cuda_host_edge_memory_mode::pageable;
+};
 
 template <class value_t>
 class device_allocation {
@@ -129,24 +328,21 @@ private:
   std::size_t size_ = 0;
 };
 
-mst::memory::host_buffer<device_edge, mst::memory::host_memory>
-make_device_edges(const mst::core::validated_graph &graph) {
-  std::vector<device_edge> edges;
-  edges.reserve(graph.edges().size());
-  for (const mst::core::edge &edge : graph.edges()) {
-    edges.push_back({edge.u.value(), edge.v.value(), edge.weight.value()});
-  }
-  return mst::memory::host_buffer<device_edge, mst::memory::host_memory>{
-      std::move(edges)};
-}
-
-cuda_result run_boruvka_on_device(const mst::core::validated_graph &graph,
-                                  cuda_profile &profile) {
+cuda_result run_boruvka_on_device(
+    const mst::core::validated_graph &graph,
+    mst::app::cuda_host_memory_mode host_memory_mode, cuda_profile &profile) {
   using clock = std::chrono::steady_clock;
 
+  const cuda_host_edge_memory_preference host_memory_preference =
+      host_edge_memory_preference_from_config(host_memory_mode);
+  enable_mapped_host_memory_if_requested(host_memory_preference);
+
   const auto setup_start = clock::now();
-  auto host_edges = make_device_edges(graph);
-  device_allocation<device_edge> device_edges(host_edges.size());
+  host_edge_storage host_edges =
+      host_edge_storage::make(graph, host_memory_preference);
+  profile.host_edge_memory_mode = host_edges.mode_name();
+  device_allocation<device_edge> device_edges(
+      host_edges.uses_mapped_zero_copy() ? 0 : host_edges.size());
   device_allocation<int> device_parent(
       static_cast<std::size_t>(graph.vertex_count()));
   device_allocation<std::uint64_t> device_best(
@@ -163,13 +359,22 @@ cuda_result run_boruvka_on_device(const mst::core::validated_graph &graph,
   profile.setup_seconds +=
       std::chrono::duration<double>(clock::now() - setup_start).count();
 
+  const device_edge *device_edge_data = nullptr;
   const auto h2d_start = clock::now();
-  check_cuda(cudaMemcpy(device_edges.buffer().data(), host_edges.span().data(),
-                        sizeof(device_edge) * host_edges.size(),
-                        cudaMemcpyHostToDevice),
-             "copying edges to device failed");
-  check_cuda(cudaDeviceSynchronize(),
-             "synchronizing CUDA host-device copy failed");
+  if (host_edges.uses_mapped_zero_copy()) {
+    device_edge_data = host_edges.mapped_device_data();
+  } else {
+    device_edge_data = device_edges.buffer().data();
+    if (host_edges.size() > 0) {
+      check_cuda(cudaMemcpy(device_edges.buffer().data(),
+                            host_edges.host_data(),
+                            sizeof(device_edge) * host_edges.size(),
+                            cudaMemcpyHostToDevice),
+                 "copying edges to device failed");
+      check_cuda(cudaDeviceSynchronize(),
+                 "synchronizing CUDA host-device copy failed");
+    }
+  }
   profile.host_to_device_seconds +=
       std::chrono::duration<double>(clock::now() - h2d_start).count();
 
@@ -209,7 +414,7 @@ cuda_result run_boruvka_on_device(const mst::core::validated_graph &graph,
     check_cuda(cudaEventRecord(best_done.get()),
                "recording CUDA best initialization completion failed");
     scan_edges_kernel<<<edge_grid, block_size>>>(
-        device_edges.buffer().data(), static_cast<int>(graph.edges().size()),
+        device_edge_data, static_cast<int>(graph.edges().size()),
         device_parent.buffer().data(), device_best.buffer().data());
     check_cuda(cudaGetLastError(), "scanning edges on device failed");
     check_cuda(cudaEventRecord(scan_done.get()),
@@ -226,7 +431,7 @@ cuda_result run_boruvka_on_device(const mst::core::validated_graph &graph,
                "recording CUDA contract start failed");
     contract_candidates_kernel<<<vertex_grid, block_size>>>(
         device_best.buffer().data(), graph.vertex_count(),
-        device_edges.buffer().data(), device_parent.buffer().data(),
+        device_edge_data, device_parent.buffer().data(),
         device_admitted_edge_indices.buffer().data(),
         device_admitted_count.buffer().data(), device_changed.buffer().data());
     check_cuda(cudaGetLastError(), "contracting candidates on device failed");
@@ -298,41 +503,39 @@ cuda_result run_boruvka_on_device(const mst::core::validated_graph &graph,
 
 } // namespace mst::backend::cuda_backend
 
-int main() {
+int main(int argc, char **argv) {
   using namespace mst::backend::cuda_backend;
   using clock = std::chrono::steady_clock;
 
+  const mst::app::config_parse_result parsed =
+      mst::app::parse_app_config(argc, argv);
+  int config_exit_code = EXIT_FAILURE;
+  if (!mst::app::handle_config_parse_result(parsed, argv[0],
+                                            config_exit_code)) {
+    return config_exit_code;
+  }
+  const mst::app::app_config &config = parsed.config;
+
   const auto total_start = clock::now();
 
-  const mst::app::selected_graph selected = mst::app::select_graph_from_env();
-  const mst::core::validated_graph graph =
-      mst::core::validate(selected.graph);
+  const mst::app::loaded_graph loaded = mst::app::load_graph(config);
+  const mst::app::selected_graph &selected = loaded.selected;
+  const mst::core::validated_graph &graph = loaded.graph;
   cuda_profile profile;
 
   const auto mst_start = clock::now();
-  const cuda_result result = run_boruvka_on_device(graph, profile);
+  const cuda_result result =
+      run_boruvka_on_device(graph, config.cuda_host_memory, profile);
   const auto mst_end = clock::now();
   const auto total_end = clock::now();
 
-  std::cout << "CUDA Boruvka MST\n";
-  std::cout << mst::core::mst_summary(result.edges, result.total_weight);
-  mst::visualization::render_graph_with_mst(graph, result.edges,
-                                            result.total_weight);
+  mst::app::print_result("CUDA Boruvka MST", config, graph, result.edges,
+                         result.total_weight);
   const auto verification_start = clock::now();
   const mst::boruvka::verification_result verification =
-      mst::boruvka::verify_against_sequential_cpu(graph, result.edges,
-                                                  result.total_weight);
+      mst::app::verify_and_print(graph, result.edges, result.total_weight);
   const double verification_seconds =
       std::chrono::duration<double>(clock::now() - verification_start).count();
-  if (verification.success) {
-    std::cout << "Sequential CPU verification: passed\n";
-  } else {
-    std::cerr << "Sequential CPU verification failed: expected weight "
-              << verification.expected_total_weight << " with "
-              << verification.expected_edge_count << " edges, got weight "
-              << verification.actual_total_weight << " with "
-              << verification.actual_edge_count << " edges\n";
-  }
 
   int device_count = 0;
   int active_device = 0;
@@ -348,36 +551,45 @@ int main() {
                                                  verification.success)
          << ",\n";
   report << mst::app::graph_metadata_json(selected) << ",\n";
-  report << "  \"timings\": {\n";
-  report << "    \"total_seconds\": "
-         << std::chrono::duration<double>(total_end - total_start).count()
-         << ",\n";
-  report << "    \"mst_loop_seconds\": "
-         << std::chrono::duration<double>(mst_end - mst_start).count() << ",\n";
-  report << "    \"sequential_cpu_verification_seconds\": "
-         << verification_seconds << ",\n";
-  report << "    \"setup_seconds\": " << profile.setup_seconds << ",\n";
-  report << "    \"host_to_device_seconds\": " << profile.host_to_device_seconds
-         << ",\n";
-  report << "    \"initialization_seconds\": " << profile.initialization_seconds
-         << ",\n";
-  report << "    \"round_reset_seconds\": " << profile.round_reset_seconds
-         << ",\n";
-  report << "    \"initialize_best_seconds\": "
-         << profile.initialize_best_seconds << ",\n";
-  report << "    \"scan_seconds\": " << profile.scan_seconds << ",\n";
-  report << "    \"contract_kernel_seconds\": "
-         << profile.contract_kernel_seconds << ",\n";
-  report << "    \"contract_copy_seconds\": " << profile.contract_copy_seconds
-         << ",\n";
-  report << "    \"contract_seconds\": " << profile.contract_seconds << ",\n";
-  report << "    \"compress_seconds\": " << profile.compress_seconds << ",\n";
-  report << "    \"device_to_host_seconds\": " << profile.device_to_host_seconds
-         << "\n";
-  report << "  },\n";
+  report << mst::app::configuration_metadata_json(config) << ",\n";
+  std::ostringstream backend_timing_fields;
+  backend_timing_fields << "    \"backend\": {\n";
+  backend_timing_fields << "      \"setup_seconds\": " << profile.setup_seconds
+                        << ",\n";
+  backend_timing_fields << "      \"host_to_device_seconds\": "
+                        << profile.host_to_device_seconds << ",\n";
+  backend_timing_fields << "      \"initialization_seconds\": "
+                        << profile.initialization_seconds << ",\n";
+  backend_timing_fields << "      \"round_reset_seconds\": "
+                        << profile.round_reset_seconds << ",\n";
+  backend_timing_fields << "      \"initialize_best_seconds\": "
+                        << profile.initialize_best_seconds << ",\n";
+  backend_timing_fields << "      \"contract_kernel_seconds\": "
+                        << profile.contract_kernel_seconds << ",\n";
+  backend_timing_fields << "      \"contract_copy_seconds\": "
+                        << profile.contract_copy_seconds << ",\n";
+  backend_timing_fields << "      \"device_to_host_seconds\": "
+                        << profile.device_to_host_seconds << "\n";
+  backend_timing_fields << "    }\n";
+  mst::reporting::write_phase_timings_json(
+      report, mst::reporting::phase_timing_profile{
+                  std::chrono::duration<double>(total_end - total_start)
+                      .count(),
+                  std::chrono::duration<double>(mst_end - mst_start).count(),
+                  verification_seconds,
+                  profile.scan_seconds,
+                  0.0,
+                  profile.contract_seconds,
+                  profile.compress_seconds,
+              },
+      backend_timing_fields.str());
+  report << ",\n";
   report << "  \"capabilities\": {\n";
   report << "    \"device_count\": " << device_count << ",\n";
   report << "    \"active_device\": " << active_device << ",\n";
+  report << "    \"host_edge_memory\": \""
+         << mst::reporting::json_escape(profile.host_edge_memory_mode)
+         << "\",\n";
   report << "    \"device_name\": \""
          << mst::reporting::json_escape(properties.name) << "\",\n";
   report << "    \"compute_capability_major\": " << properties.major << ",\n";
@@ -389,16 +601,12 @@ int main() {
          << properties.maxThreadsPerBlock << ",\n";
   report << "    \"warp_size\": " << properties.warpSize << "\n";
   report << "  },\n";
-  report << "  \"mst\": {\n";
-  report << "    \"vertex_count\": " << graph.vertex_count() << ",\n";
-  report << "    \"input_edge_count\": " << graph.edges().size() << ",\n";
-  report << "    \"selected_edge_count\": " << result.edges.size() << ",\n";
-  report << "    \"rounds\": " << result.rounds << ",\n";
-  report << "    \"total_weight\": " << result.total_weight << "\n";
-  report << "  },\n";
+  report << mst::app::mst_metadata_json(graph, result.edges.size(),
+                                        result.rounds, result.total_weight)
+         << ",\n";
   mst::boruvka::write_verification_json(report, verification);
   report << "\n";
   report << "}\n";
-  mst::reporting::write_report_from_env(report.str());
+  mst::app::write_report_if_requested(config, report.str());
   return verification.success ? EXIT_SUCCESS : EXIT_FAILURE;
 }

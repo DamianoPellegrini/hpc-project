@@ -8,6 +8,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(MST_BUILD_TESTS "Build dependency-free MST tests" ON)
+option(MST_ENABLE_RENDERING "Compile graph visualization support into apps" ON)
+set(MST_CUDA_HOST_MEMORY_DEFAULT "pinned" CACHE STRING
+    "Default CUDA host edge memory mode: pageable, pinned, or zero_copy")
+set_property(CACHE MST_CUDA_HOST_MEMORY_DEFAULT PROPERTY STRINGS
+             pageable pinned zero_copy mapped_zero_copy)
+if(NOT MST_CUDA_HOST_MEMORY_DEFAULT MATCHES "^(pageable|pinned|zero_copy|mapped_zero_copy)$")
+  message(FATAL_ERROR
+          "MST_CUDA_HOST_MEMORY_DEFAULT must be pageable, pinned, zero_copy, or mapped_zero_copy")
+endif()
 
 add_library(mst_core INTERFACE)
 target_include_directories(
@@ -17,6 +26,12 @@ target_include_directories(
     ${PROJECT_SOURCE_DIR}/include
 )
 target_compile_features(mst_core INTERFACE cxx_std_20)
+target_compile_definitions(
+  mst_core
+  INTERFACE
+    MST_ENABLE_RENDERING=$<BOOL:${MST_ENABLE_RENDERING}>
+    MST_DEFAULT_CUDA_HOST_MEMORY="${MST_CUDA_HOST_MEMORY_DEFAULT}"
+)
 
 if(MST_BUILD_TESTS)
   enable_testing()

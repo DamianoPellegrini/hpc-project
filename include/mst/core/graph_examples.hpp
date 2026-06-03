@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <random>
-#include <set>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -111,6 +112,14 @@ inline raw_graph make_dense_16_vertex_graph() {
   return raw_graph{16, std::move(edges)};
 }
 
+inline std::uint64_t encoded_undirected_edge_key(int left, int right) noexcept {
+  const auto endpoints = std::minmax(left, right);
+  return (static_cast<std::uint64_t>(
+              static_cast<std::uint32_t>(endpoints.first)) << 32) |
+         static_cast<std::uint64_t>(
+             static_cast<std::uint32_t>(endpoints.second));
+}
+
 inline random_connected_graph_config default_large_random_graph_config() {
   return *random_connected_graph_config::create(
       make_graph_vertex_count(32768), make_edge_count(196608),
@@ -127,12 +136,14 @@ make_random_connected_graph(const random_connected_graph_config &config) {
   edges.reserve(static_cast<std::size_t>(vertex_count - 1) +
                 config.extra_edges().value());
 
-  std::set<std::pair<int, int>> used_edges;
+  std::unordered_set<std::uint64_t> used_edges;
+  used_edges.reserve(edges.capacity());
   for (int vertex = 1; vertex < vertex_count; ++vertex) {
     const int parent = static_cast<int>(
         std::uniform_int_distribution<int>(0, vertex - 1)(generator));
     const auto endpoints = std::minmax(parent, vertex);
-    used_edges.insert(endpoints);
+    used_edges.insert(encoded_undirected_edge_key(endpoints.first,
+                                                  endpoints.second));
     edges.push_back({make_vertex_id(endpoints.first),
                      make_vertex_id(endpoints.second),
                      make_edge_weight(weight_dist(generator))});
@@ -148,7 +159,10 @@ make_random_connected_graph(const random_connected_graph_config &config) {
       continue;
     }
     const auto endpoints = std::minmax(left, right);
-    if (!used_edges.insert(endpoints).second) {
+    if (!used_edges
+             .insert(encoded_undirected_edge_key(endpoints.first,
+                                                 endpoints.second))
+             .second) {
       continue;
     }
     edges.push_back({make_vertex_id(endpoints.first),

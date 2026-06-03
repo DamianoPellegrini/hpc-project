@@ -12,6 +12,7 @@ CXX ?= g++
 MPICXX ?= mpicxx
 NVCC ?= nvcc
 NVCC_CCBIN ?=
+CLANG_FORMAT ?= clang-format
 
 CXXSTD ?= -std=c++20
 CPPFLAGS ?= -I. -Iinclude
@@ -28,11 +29,17 @@ CUDAFLAGS ?= -O3 -std=c++20
 CUDA_ARCH ?=
 CUDA_LDFLAGS ?=
 
+MST_ENABLE_RENDERING ?= 1
+MST_CUDA_HOST_MEMORY_DEFAULT ?= pinned
+MST_CONFIG_CPPFLAGS := -DMST_ENABLE_RENDERING=$(MST_ENABLE_RENDERING) \
+	-DMST_DEFAULT_CUDA_HOST_MEMORY=\"$(MST_CUDA_HOST_MEMORY_DEFAULT)\"
+
 ifneq ($(strip $(NVCC_CCBIN)),)
 NVCC_CCBIN_FLAG := -ccbin $(NVCC_CCBIN)
 endif
 
 MST_HEADERS := $(wildcard include/mst/*/*.hpp cuda/*.cuh)
+FORMAT_SOURCES := $(wildcard include/mst/*/*.hpp openmp/*.cpp mpi/*.cpp cuda/*.cu cuda/*.cuh tests/*.cpp)
 
 OPENMP_SRC := openmp/main.cpp
 MPI_SRC := mpi/main.cpp
@@ -44,7 +51,7 @@ MPI_BIN := $(BUILD_DIR)/mpi/mpi_app
 CUDA_BIN := $(BUILD_DIR)/cuda/cuda_app
 TEST_BIN := $(BUILD_DIR)/tests/core_tests
 
-.PHONY: help all openmp openmp_app mpi mpi_app cuda cuda_app test core_tests clean
+.PHONY: help all openmp openmp_app mpi mpi_app cuda cuda_app test core_tests format clean
 
 help:
 	@printf '%s\n' 'HPC fallback targets, no CMake/Ninja required:'
@@ -52,6 +59,9 @@ help:
 	@printf '%s\n' '  make mpi MPICXX=mpicxx'
 	@printf '%s\n' '  make cuda NVCC=nvcc NVCC_CCBIN=g++'
 	@printf '%s\n' '  make test CXX=g++'
+	@printf '%s\n' '  make format CLANG_FORMAT=clang-format'
+	@printf '%s\n' ''
+	@printf '%s\n' 'Build switches: MST_ENABLE_RENDERING=0|1 MST_CUDA_HOST_MEMORY_DEFAULT=pageable|pinned|zero_copy'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Use CMake presets for local development when CMake/Ninja are available.'
 
@@ -71,17 +81,20 @@ core_tests: $(TEST_BIN)
 test: $(TEST_BIN)
 	$<
 
+format:
+	$(CLANG_FORMAT) -i $(FORMAT_SOURCES)
+
 $(OPENMP_BIN): $(OPENMP_SRC) $(MST_HEADERS) | $(BUILD_DIR)/openmp
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $(OPENMP_FLAGS) $< -o $@ $(LDFLAGS) $(OPENMP_FLAGS) $(LDLIBS)
+	$(CXX) $(CPPFLAGS) $(MST_CONFIG_CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $(OPENMP_FLAGS) $< -o $@ $(LDFLAGS) $(OPENMP_FLAGS) $(LDLIBS)
 
 $(MPI_BIN): $(MPI_SRC) $(MST_HEADERS) | $(BUILD_DIR)/mpi
-	$(MPICXX) $(CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $(MPI_CXXFLAGS) $< -o $@ $(LDFLAGS) $(MPI_LDLIBS) $(LDLIBS)
+	$(MPICXX) $(CPPFLAGS) $(MST_CONFIG_CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $(MPI_CXXFLAGS) $< -o $@ $(LDFLAGS) $(MPI_LDLIBS) $(LDLIBS)
 
 $(CUDA_BIN): $(CUDA_SRC) $(MST_HEADERS) | $(BUILD_DIR)/cuda
-	$(NVCC) $(CUDA_CPPFLAGS) $(CUDAFLAGS) $(CUDA_ARCH) $(NVCC_CCBIN_FLAG) $< -o $@ $(CUDA_LDFLAGS)
+	$(NVCC) $(CUDA_CPPFLAGS) $(MST_CONFIG_CPPFLAGS) $(CUDAFLAGS) $(CUDA_ARCH) $(NVCC_CCBIN_FLAG) $< -o $@ $(CUDA_LDFLAGS)
 
 $(TEST_BIN): $(TEST_SRC) $(MST_HEADERS) | $(BUILD_DIR)/tests
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $< -o $@ $(LDFLAGS) $(LDLIBS)
+	$(CXX) $(CPPFLAGS) $(MST_CONFIG_CPPFLAGS) $(CXXFLAGS) $(CXXSTD) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD_DIR)/openmp $(BUILD_DIR)/mpi $(BUILD_DIR)/cuda $(BUILD_DIR)/tests:
 	mkdir -p $@

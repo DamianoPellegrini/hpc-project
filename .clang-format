@@ -1,0 +1,9 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+ColumnLimit: 88
+UseTab: Never
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: Empty
+BinPackArguments: true
+BinPackParameters: true
+PointerAlignment: Left

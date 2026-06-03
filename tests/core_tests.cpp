@@ -1,9 +1,11 @@
 #include <filesystem>
 #include <fstream>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include "mst/core/edge.hpp"
@@ -15,6 +17,7 @@
 #include "mst/memory/buffer.hpp"
 #include "mst/boruvka/contracts.hpp"
 #include "mst/boruvka/sequential_verifier.hpp"
+#include "mst/app/config.hpp"
 #include "mst/app/graph_selection.hpp"
 #include "mst/reporting/json_report.hpp"
 #include "mst/visualization/render_graph.hpp"
@@ -142,6 +145,19 @@ bool random_graph_generation_is_deterministic_and_validated() {
       return false;
     }
   }
+  std::unordered_set<std::uint64_t> seen_edges;
+  seen_edges.reserve(first.edges().size());
+  for (const edge &value : first.edges()) {
+    if (value.u == value.v) {
+      return false;
+    }
+    if (!seen_edges
+             .insert(encoded_undirected_edge_key(value.u.value(),
+                                                 value.v.value()))
+             .second) {
+      return false;
+    }
+  }
 
   const auto invalid = random_connected_graph_config::create(
       make_graph_vertex_count(1), make_edge_count(1), make_random_seed(1),
@@ -161,13 +177,77 @@ bool named_graph_examples_are_available() {
 
 bool graph_selection_metadata_is_shared() {
   const mst::app::selected_graph selected =
-      mst::app::select_graph_by_name("tie");
+      mst::app::select_graph_by_name("tie", std::nullopt);
   const std::string metadata = mst::app::graph_metadata_json(selected);
 
   return selected.name == "tie" && selected.graph.vertex_count() == 5 &&
          metadata.find("\"name\": \"tie\"") != std::string::npos &&
-         mst::app::select_graph_by_name("triangle").graph.vertex_count() == 3 &&
-         mst::app::select_graph_by_name("random").random_config.has_value();
+         mst::app::select_graph_by_name("triangle", std::nullopt)
+                 .graph.vertex_count() == 3 &&
+         mst::app::select_graph_by_name(
+             "random", mst::core::default_large_random_graph_config())
+             .random_config.has_value();
+}
+
+bool app_config_parses_cli_values() {
+  const char *argv[] = {"openmp_app",
+                        "--graph",
+                        "random",
+                        "--random-vertices=64",
+                        "--random-extra-edges",
+                        "128",
+                        "--random-seed",
+                        "886261",
+                        "--random-max-weight=100",
+                        "--report",
+                        "results/openmp.json",
+                        "--no-render"};
+  const mst::app::config_parse_result parsed =
+      mst::app::parse_app_config(static_cast<int>(std::size(argv)),
+                                 const_cast<char **>(argv));
+  if (!parsed.success || parsed.config.graph.name != "random" ||
+      !parsed.config.graph.random_config ||
+      parsed.config.render_graph.value_or(true) ||
+      parsed.config.report_path != "results/openmp.json") {
+    return false;
+  }
+
+  const auto config = *parsed.config.graph.random_config;
+  return config.vertices().value() == 64 &&
+         config.extra_edges().value() == 128 &&
+         config.seed().value() == 886261 &&
+         config.max_weight().value() == 100;
+}
+
+bool app_config_rejects_invalid_cli_values() {
+  const char *bad_graph[] = {"openmp_app", "--graph", "missing"};
+  const mst::app::config_parse_result unknown_graph =
+      mst::app::parse_app_config(static_cast<int>(std::size(bad_graph)),
+                                 const_cast<char **>(bad_graph));
+  if (unknown_graph.success ||
+      unknown_graph.error.find("unknown graph") == std::string::npos) {
+    return false;
+  }
+
+  const char *bad_random[] = {"openmp_app", "--graph", "random",
+                              "--random-vertices", "1"};
+  const mst::app::config_parse_result invalid_random =
+      mst::app::parse_app_config(static_cast<int>(std::size(bad_random)),
+                                 const_cast<char **>(bad_random));
+  return !invalid_random.success &&
+         invalid_random.error.find("invalid random graph") !=
+             std::string::npos;
+}
+
+bool app_config_supports_benchmark_and_cuda_memory_modes() {
+  const char *argv[] = {"cuda_app", "--benchmark", "--cuda-host-memory",
+                        "zero_copy"};
+  const mst::app::config_parse_result parsed =
+      mst::app::parse_app_config(static_cast<int>(std::size(argv)),
+                                 const_cast<char **>(argv));
+  return parsed.success && !parsed.config.render_graph.value_or(true) &&
+         parsed.config.cuda_host_memory ==
+             mst::app::cuda_host_memory_mode::mapped_zero_copy;
 }
 
 bool parallel_disjoint_set_admits_edges_once() {
@@ -313,6 +393,15 @@ int main() {
     return 1;
   }
   if (!graph_selection_metadata_is_shared()) {
+    return 1;
+  }
+  if (!app_config_parses_cli_values()) {
+    return 1;
+  }
+  if (!app_config_rejects_invalid_cli_values()) {
+    return 1;
+  }
+  if (!app_config_supports_benchmark_and_cuda_memory_modes()) {
     return 1;
   }
   if (!parallel_disjoint_set_admits_edges_once()) {
