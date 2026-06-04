@@ -55,6 +55,13 @@ value_after_option() {
   return 1
 }
 
+value_after_option_or_default() {
+  local name="$1"
+  local default_value="$2"
+  shift 2
+  value_after_option "$name" "$@" || printf '%s' "$default_value"
+}
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 1
@@ -87,7 +94,28 @@ mkdir -p "$RESULTS_DIR"
 
 if ! has_option "--report" "${args[@]}"; then
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  report_path="$RESULTS_DIR/${backend}_${timestamp}.json"
+  graph_name="$(value_after_option_or_default "--graph" "test" "${args[@]}")"
+  random_vertices="$(value_after_option_or_default "--random-vertices" "32768" "${args[@]}")"
+  random_extra_edges="$(value_after_option_or_default "--random-extra-edges" "196608" "${args[@]}")"
+  random_seed="$(value_after_option_or_default "--random-seed" "886261" "${args[@]}")"
+  random_max_weight="$(value_after_option_or_default "--random-max-weight" "10000" "${args[@]}")"
+  case "$backend" in
+  openmp)
+    resource_suffix="t${OMP_NUM_THREADS:-default}"
+    ;;
+  mpi)
+    resource_suffix="np${MPI_PROCS}"
+    ;;
+  cuda)
+    cuda_host_memory="$(value_after_option_or_default "--cuda-host-memory" "default" "${args[@]}")"
+    resource_suffix="hm${cuda_host_memory}"
+    ;;
+  esac
+  if [[ "$graph_name" == "random" ]]; then
+    report_path="$RESULTS_DIR/${backend}_${graph_name}_v${random_vertices}_e${random_extra_edges}_s${random_seed}_w${random_max_weight}_${resource_suffix}_${timestamp}.json"
+  else
+    report_path="$RESULTS_DIR/${backend}_${graph_name}_${resource_suffix}_${timestamp}.json"
+  fi
   args+=(--report "$report_path")
 else
   report_path="$(value_after_option "--report" "${args[@]}")"

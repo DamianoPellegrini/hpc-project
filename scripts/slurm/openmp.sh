@@ -39,7 +39,13 @@ cd "$REPO_DIR"
 make USE_CMAKE=OFF openmp CXX=g++
 
 for graph in "${graphs[@]}"; do
-  report_path="$RESULTS_DIR/openmp_${graph}_${SLURM_JOB_ID}.json"
+  resource_suffix="t${SLURM_CPUS_PER_TASK:-1}"
+  if [[ "$graph" == "random" ]]; then
+    report_name="openmp_${graph}_v${RANDOM_VERTICES}_e${RANDOM_EXTRA_EDGES}_s${RANDOM_SEED}_w${RANDOM_MAX_WEIGHT}_${resource_suffix}_${SLURM_JOB_ID}.json"
+  else
+    report_name="openmp_${graph}_${resource_suffix}_${SLURM_JOB_ID}.json"
+  fi
+  report_path="$RESULTS_DIR/$report_name"
   args=(--graph "$graph" --report "$report_path" --benchmark)
   if [[ "$graph" == "random" ]]; then
     args+=(

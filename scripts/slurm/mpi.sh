@@ -40,7 +40,13 @@ cd "$REPO_DIR"
 make USE_CMAKE=OFF mpi MPICXX=mpicxx
 
 for graph in "${graphs[@]}"; do
-  report_path="$RESULTS_DIR/mpi_${graph}_${SLURM_JOB_ID}.json"
+  resource_suffix="np${SLURM_NTASKS:-2}"
+  if [[ "$graph" == "random" ]]; then
+    report_name="mpi_${graph}_v${RANDOM_VERTICES}_e${RANDOM_EXTRA_EDGES}_s${RANDOM_SEED}_w${RANDOM_MAX_WEIGHT}_${resource_suffix}_${SLURM_JOB_ID}.json"
+  else
+    report_name="mpi_${graph}_${resource_suffix}_${SLURM_JOB_ID}.json"
+  fi
+  report_path="$RESULTS_DIR/$report_name"
   args=(--graph "$graph" --report "$report_path" --benchmark)
   if [[ "$graph" == "random" ]]; then
     args+=(

@@ -52,9 +52,10 @@ make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
 run_graph() {
   local graph="$1"
   local extra_edges="$2"
-  local report_name="cuda_${graph}_${SLURM_JOB_ID}.json"
-  if [[ "$graph" == "random" && -n "${RANDOM_EXTRA_EDGES_LIST:-}" ]]; then
-    report_name="cuda_${graph}_v${RANDOM_VERTICES}_e${extra_edges}_${SLURM_JOB_ID}.json"
+  local resource_suffix="hm${CUDA_HOST_MEMORY}"
+  local report_name="cuda_${graph}_${resource_suffix}_${SLURM_JOB_ID}.json"
+  if [[ "$graph" == "random" ]]; then
+    report_name="cuda_${graph}_v${RANDOM_VERTICES}_e${extra_edges}_s${RANDOM_SEED}_w${RANDOM_MAX_WEIGHT}_${resource_suffix}_${SLURM_JOB_ID}.json"
   fi
   local report_path="$RESULTS_DIR/$report_name"
   local args=(--graph "$graph" --report "$report_path" --benchmark
