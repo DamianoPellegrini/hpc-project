@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +24,19 @@ struct phase_timing_profile {
   double reduce_seconds = 0.0;
   double contract_seconds = 0.0;
   double compress_seconds = 0.0;
+  double algorithm_seconds = -1.0;
+};
+
+struct telemetry_details_profile {
+  double scan_time_pure_seconds = 0.0;
+  double reduce_time_pure_seconds = 0.0;
+  double contract_time_pure_seconds = 0.0;
+  double allocation_and_overhead_seconds = 0.0;
+  std::uint64_t dsu_contention_retries = 0;
+  double kernel_launch_overhead_estimated_seconds = 0.0;
+  std::uint64_t cuda_atomic_min_collision_count = 0;
+  double cuda_atomic_min_collision_rate = 0.0;
+  double unattributed_residual_seconds = 0.0;
 };
 
 inline std::string json_escape(std::string_view value) {
@@ -120,9 +134,13 @@ inline std::string common_metadata_json(std::string_view backend,
 inline void write_phase_timings_json(std::ostream &out,
                                      const phase_timing_profile &timings,
                                      std::string_view backend_fields = {}) {
+  const double algorithm_seconds = timings.algorithm_seconds >= 0.0
+                                       ? timings.algorithm_seconds
+                                       : timings.mst_loop_seconds;
   out << "  \"timings\": {\n";
   out << "    \"total_seconds\": " << timings.total_seconds << ",\n";
   out << "    \"mst_loop_seconds\": " << timings.mst_loop_seconds << ",\n";
+  out << "    \"algorithm_seconds\": " << algorithm_seconds << ",\n";
   out << "    \"sequential_cpu_verification_seconds\": "
       << timings.sequential_cpu_verification_seconds << ",\n";
   out << "    \"scan_seconds\": " << timings.scan_seconds << ",\n";
@@ -135,6 +153,40 @@ inline void write_phase_timings_json(std::ostream &out,
   } else {
     out << "\n";
   }
+  out << "  }";
+}
+
+inline double seconds_to_milliseconds(double seconds) {
+  return seconds * 1000.0;
+}
+
+inline void
+write_telemetry_details_json(std::ostream &out,
+                             const telemetry_details_profile &telemetry) {
+  out << "  \"telemetry_details\": {\n";
+  out << "    \"scan_time_pure_ms\": "
+      << seconds_to_milliseconds(telemetry.scan_time_pure_seconds) << ",\n";
+  out << "    \"reduce_time_pure_ms\": "
+      << seconds_to_milliseconds(telemetry.reduce_time_pure_seconds) << ",\n";
+  out << "    \"contract_time_pure_ms\": "
+      << seconds_to_milliseconds(telemetry.contract_time_pure_seconds)
+      << ",\n";
+  out << "    \"allocation_and_overhead_ms\": "
+      << seconds_to_milliseconds(telemetry.allocation_and_overhead_seconds)
+      << ",\n";
+  out << "    \"dsu_contention_retries\": "
+      << telemetry.dsu_contention_retries << ",\n";
+  out << "    \"kernel_launch_overhead_estimated_ms\": "
+      << seconds_to_milliseconds(
+             telemetry.kernel_launch_overhead_estimated_seconds)
+      << ",\n";
+  out << "    \"cuda_atomic_min_collision_count\": "
+      << telemetry.cuda_atomic_min_collision_count << ",\n";
+  out << "    \"cuda_atomic_min_collision_rate\": "
+      << telemetry.cuda_atomic_min_collision_rate << ",\n";
+  out << "    \"unattributed_residual_ms\": "
+      << seconds_to_milliseconds(telemetry.unattributed_residual_seconds)
+      << "\n";
   out << "  }";
 }
 

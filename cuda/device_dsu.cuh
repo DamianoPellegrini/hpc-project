@@ -15,6 +15,18 @@ __device__ int find_root_device(int *parent, int vertex) {
   }
 }
 
+__device__ int find_root_device_read_only(const int *parent, int vertex) {
+  int current = vertex;
+  while (true) {
+    const int parent_value = parent[current];
+    const int grandparent = parent[parent_value];
+    if (parent_value == grandparent) {
+      return parent_value;
+    }
+    current = parent_value;
+  }
+}
+
 __device__ bool unite_device(int *parent, int left_vertex, int right_vertex) {
   while (true) {
     const int left_root = find_root_device(parent, left_vertex);

@@ -44,7 +44,8 @@ public:
   }
 
   std::optional<mst::core::mst_edge>
-  unite(mst::core::candidate_edge candidate) {
+  unite(mst::core::candidate_edge candidate,
+        std::atomic<std::uint64_t> *retry_counter = nullptr) {
     while (true) {
       const int left = find_index(candidate.value.u.value());
       const int right = find_index(candidate.value.v.value());
@@ -59,6 +60,9 @@ public:
               expected, parent, std::memory_order_acq_rel,
               std::memory_order_acquire)) {
         return mst::core::mst_edge{candidate.value};
+      }
+      if (retry_counter != nullptr) {
+        retry_counter->fetch_add(1, std::memory_order_relaxed);
       }
     }
   }

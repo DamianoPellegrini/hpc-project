@@ -4,9 +4,9 @@
 #SBATCH --partition=only-one-gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=2G
+#SBATCH --mem=4G
 #SBATCH --gres=gpu:1
-#SBATCH --time=00:15:00
+#SBATCH --time=00:30:00
 #SBATCH --output=job_logs/out_%x_%j.log
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=d.pellegrini10@campus.unimib.it
@@ -21,7 +21,7 @@ RANDOM_VERTICES="${RANDOM_VERTICES:-32768}"
 RANDOM_EXTRA_EDGES="${RANDOM_EXTRA_EDGES:-196608}"
 RANDOM_SEED="${RANDOM_SEED:-886261}"
 RANDOM_MAX_WEIGHT="${RANDOM_MAX_WEIGHT:-10000}"
-CUDA_HOST_MEMORY="${CUDA_HOST_MEMORY:-pinned}"
+CUDA_HOST_MEMORY="${CUDA_HOST_MEMORY:-}"
 export TMPDIR="/scratch_local/$USER/${SLURM_JOB_NAME}_${SLURM_JOB_ID}"
 graph_list="${GRAPHS//,/ }"
 read -r -a graphs <<< "$graph_list"
@@ -36,7 +36,7 @@ hostname
 date
 printf 'graphs=%s vertices=%s extra_edges=%s seed=%s max_weight=%s cuda_host_memory=%s\n' \
   "$GRAPHS" "$RANDOM_VERTICES" "$RANDOM_EXTRA_EDGES" \
-  "$RANDOM_SEED" "$RANDOM_MAX_WEIGHT" "$CUDA_HOST_MEMORY"
+  "$RANDOM_SEED" "$RANDOM_MAX_WEIGHT" "${CUDA_HOST_MEMORY:-compile_default}"
 if [[ -n "${RANDOM_EXTRA_EDGES_LIST:-}" ]]; then
   printf 'RANDOM_EXTRA_EDGES_LIST=%s\n' "$RANDOM_EXTRA_EDGES_LIST"
 fi
@@ -52,14 +52,16 @@ make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
 run_graph() {
   local graph="$1"
   local extra_edges="$2"
-  local resource_suffix="hm${CUDA_HOST_MEMORY}"
+  local resource_suffix="hm${CUDA_HOST_MEMORY:-compile_default}"
   local report_name="cuda_${graph}_${resource_suffix}_${SLURM_JOB_ID}.json"
   if [[ "$graph" == "random" ]]; then
     report_name="cuda_${graph}_v${RANDOM_VERTICES}_e${extra_edges}_s${RANDOM_SEED}_w${RANDOM_MAX_WEIGHT}_${resource_suffix}_${SLURM_JOB_ID}.json"
   fi
   local report_path="$RESULTS_DIR/$report_name"
-  local args=(--graph "$graph" --report "$report_path" --benchmark
-              --cuda-host-memory "$CUDA_HOST_MEMORY")
+  local args=(--graph "$graph" --report "$report_path" --benchmark)
+  if [[ -n "$CUDA_HOST_MEMORY" ]]; then
+    args+=(--cuda-host-memory "$CUDA_HOST_MEMORY")
+  fi
   if [[ "$graph" == "random" ]]; then
     args+=(
       --random-vertices "$RANDOM_VERTICES"

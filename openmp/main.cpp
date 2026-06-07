@@ -1,6 +1,7 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -21,10 +22,31 @@
 namespace mst::backend::openmp {
 
 struct openmp_profile {
+  double candidate_reset_seconds = 0.0;
   double scan_seconds = 0.0;
   double reduce_seconds = 0.0;
+  double contraction_reset_seconds = 0.0;
   double contract_seconds = 0.0;
+  double contraction_merge_seconds = 0.0;
   double compress_seconds = 0.0;
+  std::atomic<std::uint64_t> dsu_contention_retries{0};
+
+  std::uint64_t contention_retries() const noexcept {
+    return dsu_contention_retries.load(std::memory_order_relaxed);
+  }
+
+  double profiled_mst_loop_seconds() const noexcept {
+    return candidate_reset_seconds + scan_seconds + reduce_seconds +
+           contraction_reset_seconds + contract_seconds +
+           contraction_merge_seconds + compress_seconds;
+  }
+
+  double allocation_and_overhead_seconds(double mst_loop_seconds) const {
+    const double residual =
+        std::max(0.0, mst_loop_seconds - profiled_mst_loop_seconds());
+    return candidate_reset_seconds + contraction_reset_seconds +
+           contraction_merge_seconds + residual;
+  }
 };
 
 struct openmp_workspace {
@@ -70,9 +92,12 @@ local_best_candidate_keys(const mst::core::validated_graph &graph,
                           const mst::dsu::parent_snapshot &snapshot,
                           openmp_workspace &workspace,
                           openmp_profile &profile) {
-  using clock = std::chrono::steady_clock;
+  using clock = std::chrono::high_resolution_clock;
 
+  const auto reset_start = clock::now();
   workspace.reset_candidates();
+  profile.candidate_reset_seconds +=
+      std::chrono::duration<double>(clock::now() - reset_start).count();
 
   const auto scan_start = clock::now();
 #pragma omp parallel
@@ -131,12 +156,15 @@ int apply_contractions_parallel(
     std::vector<mst::core::mst_edge> &mst_edges, int &total_weight,
     openmp_workspace &workspace,
     openmp_profile &profile) {
-  using clock = std::chrono::steady_clock;
-  const auto start = clock::now();
+  using clock = std::chrono::high_resolution_clock;
+  const auto reset_start = clock::now();
   workspace.reset_contractions();
+  profile.contraction_reset_seconds +=
+      std::chrono::duration<double>(clock::now() - reset_start).count();
   const int candidate_count = static_cast<int>(best_keys.size());
   int admitted_count = 0;
 
+  const auto contract_start = clock::now();
 #pragma omp parallel reduction(+ : admitted_count)
   {
     const int thread = omp_get_thread_num();
@@ -155,27 +183,31 @@ int apply_contractions_parallel(
       const mst::core::candidate_edge candidate{
           graph.edges()[static_cast<std::size_t>(edge_index.value())],
           edge_index};
-      if (auto admitted = dsu.unite(candidate)) {
+      if (auto admitted =
+              dsu.unite(candidate, &profile.dsu_contention_retries)) {
         edges.push_back(*admitted);
         weight += admitted->value.weight.value();
         ++admitted_count;
       }
     }
   }
+  profile.contract_seconds +=
+      std::chrono::duration<double>(clock::now() - contract_start).count();
 
+  const auto merge_start = clock::now();
   for (int thread = 0; thread < workspace.thread_capacity; ++thread) {
     total_weight += workspace.local_weights[static_cast<std::size_t>(thread)];
     auto &edges = workspace.local_edges[static_cast<std::size_t>(thread)];
     mst_edges.insert(mst_edges.end(), edges.begin(), edges.end());
   }
-  profile.contract_seconds +=
-      std::chrono::duration<double>(clock::now() - start).count();
+  profile.contraction_merge_seconds +=
+      std::chrono::duration<double>(clock::now() - merge_start).count();
   return admitted_count;
 }
 
 void compress_all_parallel(mst::dsu::parallel_disjoint_set &dsu,
                            int vertex_count, openmp_profile &profile) {
-  using clock = std::chrono::steady_clock;
+  using clock = std::chrono::high_resolution_clock;
   const auto start = clock::now();
 #pragma omp parallel for
   for (int vertex = 0; vertex < vertex_count; ++vertex) {
@@ -253,6 +285,23 @@ int main(int argc, char **argv) {
          << ",\n";
   report << mst::app::graph_metadata_json(selected) << ",\n";
   report << mst::app::configuration_metadata_json(config) << ",\n";
+  std::ostringstream backend_timing_fields;
+  backend_timing_fields << "    \"backend\": {\n";
+  backend_timing_fields << "      \"candidate_reset_seconds\": "
+                        << profile.candidate_reset_seconds << ",\n";
+  backend_timing_fields << "      \"contraction_reset_seconds\": "
+                        << profile.contraction_reset_seconds << ",\n";
+  backend_timing_fields << "      \"contraction_merge_seconds\": "
+                        << profile.contraction_merge_seconds << ",\n";
+  backend_timing_fields << "      \"profiled_mst_loop_seconds\": "
+                        << profile.profiled_mst_loop_seconds() << ",\n";
+  backend_timing_fields << "      \"allocation_and_overhead_seconds\": "
+                        << profile.allocation_and_overhead_seconds(
+                               mst_loop_seconds)
+                        << ",\n";
+  backend_timing_fields << "      \"dsu_contention_retries\": "
+                        << profile.contention_retries() << "\n";
+  backend_timing_fields << "    }\n";
   mst::reporting::write_phase_timings_json(
       report, mst::reporting::phase_timing_profile{
                   total_seconds,
@@ -262,6 +311,22 @@ int main(int argc, char **argv) {
                   profile.reduce_seconds,
                   profile.contract_seconds,
                   profile.compress_seconds,
+              },
+      backend_timing_fields.str());
+  report << ",\n";
+  mst::reporting::write_telemetry_details_json(
+      report, mst::reporting::telemetry_details_profile{
+                  profile.scan_seconds,
+                  profile.reduce_seconds,
+                  profile.contract_seconds,
+                  profile.allocation_and_overhead_seconds(mst_loop_seconds),
+                  profile.contention_retries(),
+                  0.0,
+                  0,
+                  0.0,
+                  std::max(0.0,
+                           mst_loop_seconds -
+                               profile.profiled_mst_loop_seconds()),
               });
   report << ",\n";
   report << "  \"capabilities\": {\n";

@@ -289,6 +289,19 @@ int main(std::int32_t argc, char **argv) {
                 },
         backend_timing_fields.str());
     report << ",\n";
+    mst::reporting::write_telemetry_details_json(
+        report, mst::reporting::telemetry_details_profile{
+                    max_local_compute_seconds,
+                    max_reduce_seconds,
+                    max_contract_seconds,
+                    0.0,
+                    0,
+                    0.0,
+                    0,
+                    0.0,
+                    0.0,
+                });
+    report << ",\n";
     report << "  \"capabilities\": {\n";
     report << "    \"world_size\": " << size << ",\n";
     report << "    \"mpi_version_major\": " << version << ",\n";

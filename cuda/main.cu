@@ -14,6 +14,7 @@
 #include "mst/boruvka/sequential_verifier.hpp"
 #include "mst/core/edge.hpp"
 #include "mst/core/graph.hpp"
+#include "mst/memory/buffer.hpp"
 #include "mst/reporting/json_report.hpp"
 #include "cuda/boruvka_kernels.cuh"
 
@@ -25,15 +26,44 @@ struct cuda_profile {
   double setup_seconds = 0.0;
   double host_to_device_seconds = 0.0;
   double initialization_seconds = 0.0;
-  double round_reset_seconds = 0.0;
-  double initialize_best_seconds = 0.0;
+  double round_prepare_seconds = 0.0;
   double scan_seconds = 0.0;
   double contract_kernel_seconds = 0.0;
   double contract_copy_seconds = 0.0;
   double contract_seconds = 0.0;
   double compress_seconds = 0.0;
   double device_to_host_seconds = 0.0;
+  double kernel_launch_overhead_estimated_seconds = 0.0;
+  double unattributed_residual_seconds = 0.0;
+  std::uint64_t cuda_atomic_min_collision_count = 0;
+  int kernel_launch_count = 0;
   std::string host_edge_memory_mode = "unknown";
+
+  double device_algorithm_seconds() const noexcept {
+    return round_prepare_seconds + scan_seconds + contract_kernel_seconds +
+           compress_seconds;
+  }
+
+  double profiled_backend_seconds() const noexcept {
+    return setup_seconds + host_to_device_seconds + initialization_seconds +
+           round_prepare_seconds + scan_seconds + contract_kernel_seconds +
+           contract_copy_seconds + compress_seconds + device_to_host_seconds;
+  }
+
+  double allocation_and_overhead_seconds() const noexcept {
+    return setup_seconds + host_to_device_seconds + initialization_seconds +
+           device_to_host_seconds + contract_copy_seconds +
+           kernel_launch_overhead_estimated_seconds;
+  }
+
+  double atomic_min_collision_rate(std::size_t edge_count,
+                                   int rounds) const noexcept {
+    const double attempted_updates =
+        static_cast<double>(std::max<std::size_t>(1, edge_count)) *
+        static_cast<double>(std::max(1, rounds)) * 2.0;
+    return static_cast<double>(cuda_atomic_min_collision_count) /
+           attempted_updates;
+  }
 };
 
 struct cuda_result {
@@ -148,22 +178,6 @@ public:
     other.size_ = 0;
   }
 
-  host_edge_storage &operator=(host_edge_storage &&other) noexcept {
-    if (this == &other) {
-      return *this;
-    }
-    release();
-    pageable_edges_ = std::move(other.pageable_edges_);
-    host_edges_ = other.host_edges_;
-    mapped_device_edges_ = other.mapped_device_edges_;
-    size_ = other.size_;
-    mode_ = other.mode_;
-    other.host_edges_ = nullptr;
-    other.mapped_device_edges_ = nullptr;
-    other.size_ = 0;
-    return *this;
-  }
-
   ~host_edge_storage() { release(); }
 
   static host_edge_storage
@@ -191,13 +205,6 @@ public:
     storage.mode_ = cuda_host_edge_memory_mode::pageable;
     storage.fill(graph);
     return storage;
-  }
-
-  const device_edge *host_data() const noexcept {
-    if (host_edges_ != nullptr) {
-      return host_edges_;
-    }
-    return pageable_edges_.data();
   }
 
   device_edge *host_data() noexcept {
@@ -351,6 +358,7 @@ cuda_result run_boruvka_on_device(
       static_cast<std::size_t>(std::max(1, graph.vertex_count() - 1)));
   device_allocation<int> device_admitted_count(1);
   device_allocation<int> device_changed(1);
+  device_allocation<unsigned long long> device_atomic_min_collision_count(1);
 
   const int block_size = 256;
   const int vertex_grid = (graph.vertex_count() + block_size - 1) / block_size;
@@ -381,8 +389,12 @@ cuda_result run_boruvka_on_device(
   const auto initialization_start = clock::now();
   check_cuda(cudaMemset(device_admitted_count.buffer().data(), 0, sizeof(int)),
              "resetting admitted edge count failed");
+  check_cuda(cudaMemset(device_atomic_min_collision_count.buffer().data(), 0,
+                        sizeof(unsigned long long)),
+             "resetting atomicMin collision counter failed");
   initialize_parent_kernel<<<vertex_grid, block_size>>>(
       device_parent.buffer().data(), graph.vertex_count());
+  profile.kernel_launch_count += 1;
   check_cuda(cudaGetLastError(), "initializing device parents failed");
   check_cuda(cudaDeviceSynchronize(), "synchronizing CUDA setup failed");
   profile.initialization_seconds +=
@@ -393,8 +405,7 @@ cuda_result run_boruvka_on_device(
   int host_admitted_count = 0;
   int rounds = 0;
   cuda_event round_start;
-  cuda_event reset_done;
-  cuda_event best_done;
+  cuda_event prepare_done;
   cuda_event scan_done;
   cuda_event contract_start;
   cuda_event contract_done;
@@ -404,28 +415,21 @@ cuda_result run_boruvka_on_device(
     ++rounds;
     check_cuda(cudaEventRecord(round_start.get()),
                "recording CUDA round start failed");
-    reset_round_state_kernel<<<1, 1>>>(device_changed.buffer().data());
-    check_cuda(cudaGetLastError(), "resetting CUDA round state failed");
-    check_cuda(cudaEventRecord(reset_done.get()),
-               "recording CUDA reset completion failed");
-    initialize_best_kernel<<<vertex_grid, block_size>>>(
-        device_best.buffer().data(), graph.vertex_count());
-    check_cuda(cudaGetLastError(), "initializing CUDA candidates failed");
-    check_cuda(cudaEventRecord(best_done.get()),
-               "recording CUDA best initialization completion failed");
+    initialize_round_kernel<<<vertex_grid, block_size>>>(
+        device_best.buffer().data(), graph.vertex_count(),
+        device_changed.buffer().data());
+    profile.kernel_launch_count += 1;
+    check_cuda(cudaGetLastError(), "preparing CUDA round state failed");
+    check_cuda(cudaEventRecord(prepare_done.get()),
+               "recording CUDA round preparation completion failed");
     scan_edges_kernel<<<edge_grid, block_size>>>(
         device_edge_data, static_cast<int>(graph.edges().size()),
-        device_parent.buffer().data(), device_best.buffer().data());
+        device_parent.buffer().data(), device_best.buffer().data(),
+        device_atomic_min_collision_count.buffer().data());
+    profile.kernel_launch_count += 1;
     check_cuda(cudaGetLastError(), "scanning edges on device failed");
     check_cuda(cudaEventRecord(scan_done.get()),
                "recording CUDA scan completion failed");
-    check_cuda(cudaEventSynchronize(scan_done.get()),
-               "synchronizing CUDA scan failed");
-    profile.round_reset_seconds +=
-        elapsed_seconds(round_start.get(), reset_done.get());
-    profile.initialize_best_seconds +=
-        elapsed_seconds(reset_done.get(), best_done.get());
-    profile.scan_seconds += elapsed_seconds(best_done.get(), scan_done.get());
 
     check_cuda(cudaEventRecord(contract_start.get()),
                "recording CUDA contract start failed");
@@ -434,14 +438,29 @@ cuda_result run_boruvka_on_device(
         device_edge_data, device_parent.buffer().data(),
         device_admitted_edge_indices.buffer().data(),
         device_admitted_count.buffer().data(), device_changed.buffer().data());
+    profile.kernel_launch_count += 1;
     check_cuda(cudaGetLastError(), "contracting candidates on device failed");
     check_cuda(cudaEventRecord(contract_done.get()),
                "recording CUDA contract completion failed");
-    check_cuda(cudaEventSynchronize(contract_done.get()),
-               "synchronizing CUDA contract failed");
+
+    check_cuda(cudaEventRecord(compress_start.get()),
+               "recording CUDA compression start failed");
+    compress_all_kernel<<<vertex_grid, block_size>>>(
+        device_parent.buffer().data(), graph.vertex_count());
+    profile.kernel_launch_count += 1;
+    check_cuda(cudaGetLastError(), "compressing device parents failed");
+    check_cuda(cudaEventRecord(compress_done.get()),
+               "recording CUDA compression completion failed");
+    check_cuda(cudaEventSynchronize(compress_done.get()),
+               "synchronizing CUDA compression failed");
+    profile.round_prepare_seconds +=
+        elapsed_seconds(round_start.get(), prepare_done.get());
+    profile.scan_seconds += elapsed_seconds(prepare_done.get(), scan_done.get());
     const double contract_kernel_seconds =
         elapsed_seconds(contract_start.get(), contract_done.get());
     profile.contract_kernel_seconds += contract_kernel_seconds;
+    profile.compress_seconds +=
+        elapsed_seconds(compress_start.get(), compress_done.get());
 
     const auto contract_copy_start = clock::now();
     check_cuda(cudaMemcpy(&host_changed, device_changed.buffer().data(),
@@ -456,18 +475,6 @@ cuda_result run_boruvka_on_device(
             .count();
     profile.contract_copy_seconds += contract_copy_seconds;
     profile.contract_seconds += contract_kernel_seconds + contract_copy_seconds;
-
-    check_cuda(cudaEventRecord(compress_start.get()),
-               "recording CUDA compression start failed");
-    compress_all_kernel<<<vertex_grid, block_size>>>(device_parent.buffer().data(),
-                                                     graph.vertex_count());
-    check_cuda(cudaGetLastError(), "compressing device parents failed");
-    check_cuda(cudaEventRecord(compress_done.get()),
-               "recording CUDA compression completion failed");
-    check_cuda(cudaEventSynchronize(compress_done.get()),
-               "synchronizing CUDA compression failed");
-    profile.compress_seconds +=
-        elapsed_seconds(compress_start.get(), compress_done.get());
 
     if (host_changed == 0 || host_admitted_count >= graph.vertex_count() - 1) {
       break;
@@ -484,6 +491,13 @@ cuda_result run_boruvka_on_device(
                           cudaMemcpyDeviceToHost),
                "copying admitted CUDA edge indices failed");
   }
+  unsigned long long host_collision_count = 0;
+  check_cuda(cudaMemcpy(&host_collision_count,
+                        device_atomic_min_collision_count.buffer().data(),
+                        sizeof(unsigned long long), cudaMemcpyDeviceToHost),
+             "copying CUDA atomicMin collision count failed");
+  profile.cuda_atomic_min_collision_count =
+      static_cast<std::uint64_t>(host_collision_count);
   profile.device_to_host_seconds +=
       std::chrono::duration<double>(clock::now() - d2h_start).count();
 
@@ -528,6 +542,14 @@ int main(int argc, char **argv) {
       run_boruvka_on_device(graph, config.cuda_host_memory, profile);
   const auto mst_end = clock::now();
   const auto total_end = clock::now();
+  const double mst_loop_seconds =
+      std::chrono::duration<double>(mst_end - mst_start).count();
+  const double total_seconds =
+      std::chrono::duration<double>(total_end - total_start).count();
+  profile.unattributed_residual_seconds =
+      std::max(0.0, mst_loop_seconds - profile.profiled_backend_seconds());
+  profile.kernel_launch_overhead_estimated_seconds =
+      profile.unattributed_residual_seconds;
 
   mst::app::print_result("CUDA Boruvka MST", config, graph, result.edges,
                          result.total_weight);
@@ -540,7 +562,8 @@ int main(int argc, char **argv) {
   int device_count = 0;
   int active_device = 0;
   cudaDeviceProp properties{};
-  check_cuda(cudaGetDeviceCount(&device_count), "querying CUDA device count failed");
+  check_cuda(cudaGetDeviceCount(&device_count),
+             "querying CUDA device count failed");
   check_cuda(cudaGetDevice(&active_device), "querying active CUDA device failed");
   check_cuda(cudaGetDeviceProperties(&properties, active_device),
              "querying CUDA device properties failed");
@@ -560,29 +583,58 @@ int main(int argc, char **argv) {
                         << profile.host_to_device_seconds << ",\n";
   backend_timing_fields << "      \"initialization_seconds\": "
                         << profile.initialization_seconds << ",\n";
-  backend_timing_fields << "      \"round_reset_seconds\": "
-                        << profile.round_reset_seconds << ",\n";
-  backend_timing_fields << "      \"initialize_best_seconds\": "
-                        << profile.initialize_best_seconds << ",\n";
+  backend_timing_fields << "      \"round_prepare_seconds\": "
+                        << profile.round_prepare_seconds << ",\n";
   backend_timing_fields << "      \"contract_kernel_seconds\": "
                         << profile.contract_kernel_seconds << ",\n";
   backend_timing_fields << "      \"contract_copy_seconds\": "
                         << profile.contract_copy_seconds << ",\n";
   backend_timing_fields << "      \"device_to_host_seconds\": "
-                        << profile.device_to_host_seconds << "\n";
+                        << profile.device_to_host_seconds << ",\n";
+  backend_timing_fields << "      \"device_algorithm_seconds\": "
+                        << profile.device_algorithm_seconds() << ",\n";
+  backend_timing_fields << "      \"profiled_backend_seconds\": "
+                        << profile.profiled_backend_seconds() << ",\n";
+  backend_timing_fields << "      \"unattributed_residual_seconds\": "
+                        << profile.unattributed_residual_seconds << ",\n";
+  backend_timing_fields << "      \"kernel_launch_overhead_estimated_seconds\": "
+                        << profile.kernel_launch_overhead_estimated_seconds
+                        << ",\n";
+  backend_timing_fields << "      \"kernel_launch_count\": "
+                        << profile.kernel_launch_count << ",\n";
+  backend_timing_fields << "      \"cuda_atomic_min_collision_count\": "
+                        << profile.cuda_atomic_min_collision_count << ",\n";
+  backend_timing_fields << "      \"cuda_atomic_min_collision_rate\": "
+                        << profile.atomic_min_collision_rate(
+                               graph.edges().size(), result.rounds)
+                        << "\n";
   backend_timing_fields << "    }\n";
   mst::reporting::write_phase_timings_json(
       report, mst::reporting::phase_timing_profile{
-                  std::chrono::duration<double>(total_end - total_start)
-                      .count(),
-                  std::chrono::duration<double>(mst_end - mst_start).count(),
+                  total_seconds,
+                  mst_loop_seconds,
                   verification_seconds,
                   profile.scan_seconds,
                   0.0,
                   profile.contract_seconds,
                   profile.compress_seconds,
+                  profile.device_algorithm_seconds(),
               },
       backend_timing_fields.str());
+  report << ",\n";
+  mst::reporting::write_telemetry_details_json(
+      report, mst::reporting::telemetry_details_profile{
+                  profile.scan_seconds,
+                  0.0,
+                  profile.contract_kernel_seconds,
+                  profile.allocation_and_overhead_seconds(),
+                  0,
+                  profile.kernel_launch_overhead_estimated_seconds,
+                  profile.cuda_atomic_min_collision_count,
+                  profile.atomic_min_collision_rate(graph.edges().size(),
+                                                    result.rounds),
+                  profile.unattributed_residual_seconds,
+              });
   report << ",\n";
   report << "  \"capabilities\": {\n";
   report << "    \"device_count\": " << device_count << ",\n";

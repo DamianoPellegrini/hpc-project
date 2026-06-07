@@ -31,38 +31,45 @@ __global__ void initialize_parent_kernel(int *parent, int count) {
   }
 }
 
-__global__ void initialize_best_kernel(std::uint64_t *best, int count) {
+__global__ void initialize_round_kernel(std::uint64_t *best, int count,
+                                        int *changed) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index == 0) {
+    *changed = 0;
+  }
   if (index < count) {
     best[index] = cuda_empty_candidate_key;
   }
 }
 
-__global__ void reset_round_state_kernel(int *changed) {
-  if (blockIdx.x == 0 && threadIdx.x == 0) {
-    *changed = 0;
-  }
-}
-
 __global__ void scan_edges_kernel(const device_edge *edges, int edge_count,
-                                  int *parent, std::uint64_t *best) {
+                                  const int *parent, std::uint64_t *best,
+                                  unsigned long long *collision_count) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= edge_count) {
     return;
   }
 
   const device_edge edge = edges[index];
-  const int left_root = find_root_device(parent, edge.u);
-  const int right_root = find_root_device(parent, edge.v);
+  const int left_root = find_root_device_read_only(parent, edge.u);
+  const int right_root = find_root_device_read_only(parent, edge.v);
   if (left_root == right_root) {
     return;
   }
 
   const std::uint64_t packed = pack_candidate_key_device(edge.weight, index);
-  atomicMin(reinterpret_cast<unsigned long long *>(&best[left_root]),
-            static_cast<unsigned long long>(packed));
-  atomicMin(reinterpret_cast<unsigned long long *>(&best[right_root]),
-            static_cast<unsigned long long>(packed));
+  const unsigned long long old_left =
+      atomicMin(reinterpret_cast<unsigned long long *>(&best[left_root]),
+                static_cast<unsigned long long>(packed));
+  if (old_left != cuda_empty_candidate_key) {
+    atomicAdd(collision_count, 1ULL);
+  }
+  const unsigned long long old_right =
+      atomicMin(reinterpret_cast<unsigned long long *>(&best[right_root]),
+                static_cast<unsigned long long>(packed));
+  if (old_right != cuda_empty_candidate_key) {
+    atomicAdd(collision_count, 1ULL);
+  }
 }
 
 __global__ void contract_candidates_kernel(

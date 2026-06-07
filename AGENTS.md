@@ -20,6 +20,10 @@ Generated outputs belong in ignored paths: `build/`, `results/`, `job_logs/`, an
 - `cmake --build --preset default --target cuda_app && ./build/cuda/cuda_app` runs CUDA on a CUDA-capable machine.
 - `typst compile --root . report/main.typ report/main.pdf` builds the UniMiB Typst report and allows `report/data.typ` to read JSON files from `results/`.
 
+The top-level `Makefile` is the cluster compilation path used by the Slurm scripts.
+It mirrors the CMake targets and build switches, but it intentionally does not use CMake/Ninja on the cluster because those tools are not available there.
+Use the direct fallback form on the cluster, for example `make USE_CMAKE=OFF openmp CXX=g++`, `make USE_CMAKE=OFF mpi MPICXX=mpicxx`, or `make USE_CMAKE=OFF cuda NVCC=nvcc NVCC_CCBIN=g++`.
+
 Use `MST_GRAPH=test|triangle|square|tie|dense16|random` to select inputs.
 For random graphs, set `MST_RANDOM_VERTICES`, `MST_RANDOM_EXTRA_EDGES`, `MST_RANDOM_SEED`, and `MST_RANDOM_MAX_WEIGHT`.
 Set `MST_REPORT_PATH=results/openmp.json` to emit JSON reports.

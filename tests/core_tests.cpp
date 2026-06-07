@@ -1,3 +1,4 @@
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
@@ -104,6 +105,45 @@ bool json_report_escapes_and_writes_file() {
   buffer << report_stream.rdbuf();
   std::filesystem::remove(report_path);
   return buffer.str() == "{\"ok\":true}\n";
+}
+
+bool phase_timing_profile_writes_algorithm_seconds() {
+  std::ostringstream out;
+  mst::reporting::write_phase_timings_json(
+      out, mst::reporting::phase_timing_profile{
+               10.0,
+               8.0,
+               1.0,
+               2.0,
+               3.0,
+               4.0,
+               5.0,
+           });
+  const std::string json = out.str();
+  return json.find("\"algorithm_seconds\": 8") != std::string::npos;
+}
+
+bool telemetry_details_profile_writes_standard_ms_fields() {
+  std::ostringstream out;
+  mst::reporting::write_telemetry_details_json(
+      out, mst::reporting::telemetry_details_profile{
+               0.001,
+               0.002,
+               0.003,
+               0.004,
+               7,
+               0.005,
+           });
+  const std::string json = out.str();
+  return json.find("\"telemetry_details\"") != std::string::npos &&
+         json.find("\"scan_time_pure_ms\": 1") != std::string::npos &&
+         json.find("\"reduce_time_pure_ms\": 2") != std::string::npos &&
+         json.find("\"contract_time_pure_ms\": 3") != std::string::npos &&
+         json.find("\"allocation_and_overhead_ms\": 4") !=
+             std::string::npos &&
+         json.find("\"dsu_contention_retries\": 7") != std::string::npos &&
+         json.find("\"kernel_launch_overhead_estimated_ms\": 5") !=
+             std::string::npos;
 }
 
 bool candidate_keys_order_by_weight_then_edge_index() {
@@ -269,6 +309,17 @@ bool parallel_disjoint_set_admits_edges_once() {
          set.component_count() == 2;
 }
 
+bool parallel_disjoint_set_retry_counter_stays_zero_without_contention() {
+  mst::dsu::parallel_disjoint_set set{2};
+  std::atomic<std::uint64_t> retries{0};
+  const mst::core::candidate_edge candidate{mst::core::edge{
+      mst::core::make_vertex_id(0), mst::core::make_vertex_id(1),
+      mst::core::make_edge_weight(3)}};
+
+  const auto admitted = set.unite(candidate, &retries);
+  return admitted.has_value() && retries.load(std::memory_order_relaxed) == 0;
+}
+
 bool large_graph_rendering_is_summarized() {
   const auto config = mst::core::random_connected_graph_config::create(
       mst::core::make_graph_vertex_count(129), mst::core::make_edge_count(0),
@@ -383,6 +434,12 @@ int main() {
   if (!json_report_escapes_and_writes_file()) {
     return 1;
   }
+  if (!phase_timing_profile_writes_algorithm_seconds()) {
+    return 1;
+  }
+  if (!telemetry_details_profile_writes_standard_ms_fields()) {
+    return 1;
+  }
   if (!candidate_keys_order_by_weight_then_edge_index()) {
     return 1;
   }
@@ -405,6 +462,9 @@ int main() {
     return 1;
   }
   if (!parallel_disjoint_set_admits_edges_once()) {
+    return 1;
+  }
+  if (!parallel_disjoint_set_retry_counter_stays_zero_without_contention()) {
     return 1;
   }
   if (!large_graph_rendering_is_summarized()) {
