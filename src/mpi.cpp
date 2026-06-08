@@ -25,9 +25,6 @@
 // edges with equal weight connecting the same pair of components are still
 // disambiguated by id; the redundant one is dropped by the union-find check.
 //
-// Build:  mpic++ -O3 -std=c++17 boruvka_mpi.cpp -o boruvka_mpi
-// Run:    mpirun -np 4 ./boruvka_mpi [graph_file]
-//
 // Graph file format (1 header line + E edge lines):
 //   V E
 //   u v w        // 0-based vertex ids, w is the (real) weight
@@ -40,6 +37,8 @@
 #include <climits>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -154,6 +153,29 @@ static void generate_graph(int V, int extra, std::vector<Edge>& edges,
     }
 }
 
+// Riferimento seriale (Kruskal) usato solo per validare il risultato su rank 0.
+static Weight kruskal_weight(int V, std::vector<Edge> edges) {
+    std::sort(edges.begin(), edges.end(),
+              [](const Edge& a, const Edge& b) { return a.w < b.w; });
+    std::vector<int> parent(V);
+    std::iota(parent.begin(), parent.end(), 0);
+    auto find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    Weight total = 0.0;
+    int cnt = 0;
+    for (const auto& e : edges) {
+        int ru = find(e.u), rv = find(e.v);
+        if (ru != rv) {
+            parent[ru] = rv;
+            total += e.w;
+            if (++cnt == V - 1) break;
+        }
+    }
+    return total;
+}
+
 // --------------------------------------------------------------------------
 // Main
 // --------------------------------------------------------------------------
@@ -169,18 +191,26 @@ int main(int argc, char** argv) {
     MPI_Op       cand_op;
     MPI_Op_create(&cand_min, /*commute=*/1, &cand_op);
 
-    // ---- rank 0 builds the graph -----------------------------------------
+    // ---- overhead: setup (generazione/lettura grafo + distribuzione) -----
+    MPI_Barrier(MPI_COMM_WORLD);
+    double to0 = MPI_Wtime();
+
+    // rank 0 builds the graph: `<graph_file>` (1 arg) carica da file,
+    // `<n> <extra_edges> <seed>` (3 arg) genera un grafo casuale connesso —
+    // STESSA interfaccia posizionale di OpenMP/CUDA per il path generato.
     int V = 0, E = 0;
     std::vector<Edge> edges;          // only meaningful on rank 0
     if (rank == 0) {
-        if (argc > 1) {
+        if (argc == 2) {
             if (!read_graph(argv[1], V, edges)) {
                 std::cerr << "Cannot read graph file: " << argv[1] << "\n";
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
         } else {
-            V = 20000;
-            generate_graph(V, 8 * V, edges);   // ~8 edges/vertex
+            V = (argc > 1) ? std::atoi(argv[1]) : 20000;
+            int extra_edges = (argc > 2) ? std::atoi(argv[2]) : 8 * V;
+            unsigned seed = (argc > 3) ? (unsigned)std::strtoul(argv[3], nullptr, 10) : 42u;
+            generate_graph(V, extra_edges, edges, seed);
         }
         E = static_cast<int>(edges.size());
         std::cout << "Graph: V=" << V << " E=" << E
@@ -204,12 +234,15 @@ int main(int argc, char** argv) {
                  counts.data(), displs.data(), edge_type,
                  local.data(), local_n, edge_type, 0, MPI_COMM_WORLD);
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    double to1 = MPI_Wtime();
+
     // ---- Borůvka phases --------------------------------------------------
-    std::vector<int> comp{V};                       // comp[v] = root of v
+    std::vector<int> comp(V);                       // comp[v] = root of v
     std::iota(comp.begin(), comp.end(), 0);
 
-    std::vector<CandEdge> best{V}, link_buf;
-    std::vector<int>      link{V};
+    std::vector<CandEdge> best(V), link_buf;
+    std::vector<int>      link(V);
     std::vector<CandEdge> mst;                      // chosen MST edges
     double mst_weight = 0.0;
     int    phases     = 0;
@@ -270,14 +303,39 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     double t1 = MPI_Wtime();
 
+    // ---- verifica sequenziale (Kruskal su rank 0, cronometrata a parte) --
+    MPI_Barrier(MPI_COMM_WORLD);
+    double tv0 = MPI_Wtime();
+    Weight kruskal_w = 0.0;
+    bool match = true;
     if (rank == 0) {
+        kruskal_w = kruskal_weight(V, edges);
+        match = std::abs(mst_weight - kruskal_w) < 1e-6 * (1.0 + std::abs(kruskal_w));
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    double tv1 = MPI_Wtime();
+
+    if (rank == 0) {
+        const char* verification = match ? "MATCH" : "MISMATCH";
         std::cout << "MST edges : " << mst.size()  << "\n";
         std::cout << "MST weight: " << mst_weight   << "\n";
         std::cout << "Phases    : " << phases        << "\n";
-        std::cout << "Time      : " << (t1 - t0)     << " s\n";
+        std::cout << "Kruskal (seriale): peso=" << kruskal_w
+                  << "  -> " << verification << "\n";
         // Uncomment to dump the tree:
         // for (const auto& e : mst)
         //     std::cout << e.u << ' ' << e.v << ' ' << e.weight << '\n';
+
+        double overhead_seconds = to1 - to0;
+        double exec_seconds     = t1 - t0;
+        double verify_seconds   = tv1 - tv0;
+        double total_seconds    = overhead_seconds + exec_seconds;
+
+        printf("verification=%s\n", verification);
+        printf("overhead_seconds=%.6f\n", overhead_seconds);
+        printf("exec_seconds=%.6f\n", exec_seconds);
+        printf("total_seconds=%.6f\n", total_seconds);
+        printf("verify_seconds=%.6f\n", verify_seconds);
     }
 
     MPI_Op_free(&cand_op);
