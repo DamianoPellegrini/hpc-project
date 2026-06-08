@@ -11,6 +11,8 @@
 
 namespace mst::app {
 
+/// Grafo grezzo selezionato più i metadati della scelta (sorgente, nome,
+/// eventuale config casuale): servono a riportarla fedelmente nei log e nel report.
 struct selected_graph {
   graph_source_kind source;
   std::string name;
@@ -18,6 +20,8 @@ struct selected_graph {
   std::optional<mst::core::random_connected_graph_config> random_config;
 };
 
+/// Smista per nome verso una factory del catalogo, oppure genera un grafo
+/// casuale per "random"; un nome sconosciuto ricade sul grafo di test condiviso.
 inline selected_graph select_graph_by_name(
     std::string_view name,
     std::optional<mst::core::random_connected_graph_config> random_config) {
@@ -48,10 +52,12 @@ inline selected_graph select_graph_by_name(
           mst::core::make_sparse_12_vertex_graph(), std::nullopt};
 }
 
+/// Spacchetta la `graph_config` e delega a `select_graph_by_name`.
 inline selected_graph select_graph(const graph_config &config) {
   return select_graph_by_name(config.name, config.random_config);
 }
 
+/// Frammento JSON coi metadati del grafo selezionato (nome, sorgente, dimensioni, parametri se casuale).
 inline std::string graph_metadata_json(const selected_graph &selected) {
   std::ostringstream out;
   out << "  \"graph\": {\n";

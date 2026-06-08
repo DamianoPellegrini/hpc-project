@@ -4,7 +4,8 @@
 
 namespace mst::boruvka {
 
-/// Static contract shared by all execution backends.
+/// Alias comodo su `boruvka_round_engine`: ogni backend deve rispettare
+/// questo contratto a tempo di compilazione.
 template <class backend_t>
 concept backend = boruvka_round_engine<backend_t>;
 

@@ -279,15 +279,12 @@ bool app_config_rejects_invalid_cli_values() {
              std::string::npos;
 }
 
-bool app_config_supports_benchmark_and_cuda_memory_modes() {
-  const char *argv[] = {"cuda_app", "--benchmark", "--cuda-host-memory",
-                        "zero_copy"};
+bool app_config_supports_benchmark_alias() {
+  const char *argv[] = {"cuda_app", "--benchmark"};
   const mst::app::config_parse_result parsed =
       mst::app::parse_app_config(static_cast<int>(std::size(argv)),
                                  const_cast<char **>(argv));
-  return parsed.success && !parsed.config.render_graph.value_or(true) &&
-         parsed.config.cuda_host_memory ==
-             mst::app::cuda_host_memory_mode::mapped_zero_copy;
+  return parsed.success && !parsed.config.render_graph.value_or(true);
 }
 
 bool parallel_disjoint_set_admits_edges_once() {
@@ -458,7 +455,7 @@ int main() {
   if (!app_config_rejects_invalid_cli_values()) {
     return 1;
   }
-  if (!app_config_supports_benchmark_and_cuda_memory_modes()) {
+  if (!app_config_supports_benchmark_alias()) {
     return 1;
   }
   if (!parallel_disjoint_set_admits_edges_once()) {

@@ -21,6 +21,8 @@ RANDOM_VERTICES="${RANDOM_VERTICES:-32768}"
 RANDOM_EXTRA_EDGES="${RANDOM_EXTRA_EDGES:-196608}"
 RANDOM_SEED="${RANDOM_SEED:-886261}"
 RANDOM_MAX_WEIGHT="${RANDOM_MAX_WEIGHT:-10000}"
+# Sceglie MST_CUDA_HOST_MEMORY_DEFAULT in fase di build: l'app decide la
+# modalità memoria host CUDA solo a compile time, non più da CLI.
 CUDA_HOST_MEMORY="${CUDA_HOST_MEMORY:-}"
 export TMPDIR="/scratch_local/$USER/${SLURM_JOB_NAME}_${SLURM_JOB_ID}"
 graph_list="${GRAPHS//,/ }"
@@ -47,7 +49,11 @@ module load amd/gcc-12.2.1/openmpi-4.1.6
 module load amd/nvidia/cuda-12.3.2
 
 cd "$REPO_DIR"
-make USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++
+make_args=(USE_CMAKE=OFF cuda CXX=g++ NVCC=nvcc NVCC_CCBIN=g++)
+if [[ -n "$CUDA_HOST_MEMORY" ]]; then
+  make_args+=("MST_CUDA_HOST_MEMORY_DEFAULT=$CUDA_HOST_MEMORY")
+fi
+make "${make_args[@]}"
 
 run_graph() {
   local graph="$1"
@@ -59,9 +65,6 @@ run_graph() {
   fi
   local report_path="$RESULTS_DIR/$report_name"
   local args=(--graph "$graph" --report "$report_path" --benchmark)
-  if [[ -n "$CUDA_HOST_MEMORY" ]]; then
-    args+=(--cuda-host-memory "$CUDA_HOST_MEMORY")
-  fi
   if [[ "$graph" == "random" ]]; then
     args+=(
       --random-vertices "$RANDOM_VERTICES"

@@ -20,17 +20,21 @@
 
 namespace mst::app {
 
+/// Grafo selezionato (coi suoi metadati) più la versione validata: serve sia
+/// per eseguire l'algoritmo sia per riportare la selezione originale nei report.
 struct loaded_graph {
   selected_graph selected;
   mst::core::validated_graph graph;
 };
 
+/// Seleziona e valida il grafo dalla configurazione: pronto per un backend.
 inline loaded_graph load_graph(const app_config &config) {
   selected_graph selected = select_graph(config.graph);
   mst::core::validated_graph graph = mst::core::validate(selected.graph);
   return loaded_graph{std::move(selected), std::move(graph)};
 }
 
+/// Stampa intestazione, riepilogo dell'MST e — se richiesto — il disegno ASCII del grafo.
 inline void print_result(std::string_view header, const app_config &config,
                          const mst::core::validated_graph &graph,
                          const std::vector<mst::core::mst_edge> &edges,
@@ -43,6 +47,7 @@ inline void print_result(std::string_view header, const app_config &config,
   }
 }
 
+/// Confronta l'MST col riferimento sequenziale e stampa l'esito (su `out` se ok, su `err` coi dettagli se no).
 inline mst::boruvka::verification_result verify_and_print(
     const mst::core::validated_graph &graph,
     const std::vector<mst::core::mst_edge> &edges, int total_weight,
@@ -61,6 +66,7 @@ inline mst::boruvka::verification_result verify_and_print(
   return verification;
 }
 
+/// Frammento JSON con la configurazione rilevante per il report (rendering, memoria host CUDA...).
 inline std::string configuration_metadata_json(const app_config &config) {
   std::ostringstream out;
   out << "  \"configuration\": {\n";
@@ -72,13 +78,12 @@ inline std::string configuration_metadata_json(const app_config &config) {
   }
   out << ",\n";
   out << "    \"render_enabled\": "
-      << (should_render_graph(config) ? "true" : "false") << ",\n";
-  out << "    \"cuda_host_memory\": \""
-      << cuda_host_memory_mode_name(config.cuda_host_memory) << "\"\n";
+      << (should_render_graph(config) ? "true" : "false") << "\n";
   out << "  }";
   return out.str();
 }
 
+/// Frammento JSON con le statistiche dell'MST: vertici, archi, round, peso totale.
 inline std::string mst_metadata_json(const mst::core::validated_graph &graph,
                                      std::size_t selected_edge_count,
                                      int rounds, int total_weight) {
@@ -93,6 +98,7 @@ inline std::string mst_metadata_json(const mst::core::validated_graph &graph,
   return out.str();
 }
 
+/// Scrive il report solo se è stato passato `--report`; altrimenti `false` senza fare nulla.
 inline bool write_report_if_requested(const app_config &config,
                                       std::string_view report) {
   if (config.report_path.empty()) {
@@ -101,6 +107,8 @@ inline bool write_report_if_requested(const app_config &config,
   return mst::reporting::write_report(config.report_path, report);
 }
 
+/// Gestisce l'esito del parsing CLI: stampa help o errore+help e imposta il
+/// codice d'uscita; ritorna `true` solo se si può proseguire.
 inline bool handle_config_parse_result(const config_parse_result &parsed,
                                        std::string_view executable,
                                        int &exit_code,

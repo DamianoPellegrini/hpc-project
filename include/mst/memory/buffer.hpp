@@ -7,17 +7,20 @@
 
 namespace mst::memory {
 
-/// Host-resident memory.
+/// Tag di residenza: memoria residente sull'host.
 struct host_memory {};
-/// Device-resident CUDA memory.
+/// Tag di residenza: memoria residente sul device CUDA.
 struct device_memory {};
-/// Host memory suitable for pinned transfer APIs.
+/// Tag di residenza: memoria host "pinned" (page-locked), buona per il DMA asincrono.
 struct pinned_memory {};
-/// Ordinary pageable host memory.
+/// Tag di residenza: memoria host paginabile ordinaria, nessuna garanzia di velocità verso il device.
 struct pageable_memory {};
-/// Unified host/device memory.
+/// Tag di residenza: memoria unificata, visibile sia da host sia da device.
 struct unified_memory {};
 
+/// Buffer host parametrizzato anche su un tag di residenza: la rappresentazione
+/// è sempre uno `std::vector`, ma il tag marca a livello di tipo quale
+/// strategia CUDA è prevista, evitando di mischiare buffer con politiche diverse.
 template <class value_t, class residency_t> class host_buffer {
 public:
   host_buffer() = default;
@@ -34,6 +37,8 @@ private:
   std::vector<value_t> values_;
 };
 
+/// Vista non proprietaria su memoria device: solo puntatore e dimensione,
+/// la vita dell'allocazione resta a chi la gestisce (es. `device_allocation`).
 template <class value_t> class device_buffer {
 public:
   device_buffer() = default;

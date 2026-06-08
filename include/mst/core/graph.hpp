@@ -10,7 +10,7 @@ namespace mst::core {
 
 template <class state_t> class graph {
 public:
-  /// Construct a graph in the given typestate.
+  /// Costruisce un grafo nel typestate dato (`raw` o `validated`).
   graph(int vertex_count, std::vector<edge> edges)
       : vertex_count_(vertex_count), edges_(std::move(edges)) {}
 
@@ -25,7 +25,7 @@ private:
 using raw_graph = graph<raw>;
 using validated_graph = graph<validated>;
 
-/// Check that every endpoint lies in [0, vertex_count).
+/// Vero se ogni estremo è in [0, vertex_count): la condizione per passare da `raw_graph` a `validated_graph`.
 inline bool has_valid_vertex_ids(const raw_graph &graph_value) {
   if (graph_value.vertex_count() <= 0) {
     return false;
@@ -42,14 +42,16 @@ inline bool has_valid_vertex_ids(const raw_graph &graph_value) {
   return true;
 }
 
-/// Promote a raw graph into the validated typestate.
+/// Promuove un grafo a `validated`. L'`assert` cattura in debug i vertici
+/// fuori range; in release l'invariante resta a carico di chi costruisce il grafo.
 inline validated_graph validate(raw_graph graph_value) {
   assert(has_valid_vertex_ids(graph_value) &&
          "graph contains vertex IDs outside [0, vertex_count)");
   return validated_graph{graph_value.vertex_count(), graph_value.edges()};
 }
 
-/// Shared repository test graph used by all backends.
+/// Grafo di prova condiviso (12 vertici, pesi noti): tutti i backend lo
+/// usano per confrontarsi fra loro e col riferimento sequenziale.
 inline raw_graph make_test_graph() {
   return raw_graph{
       12,

@@ -16,6 +16,9 @@
 
 namespace mst::reporting {
 
+/// Tempi di fase comuni a tutti i backend, per il report JSON.
+/// `algorithm_seconds` è opzionale (-1.0 = non misurato): in quel caso
+/// `write_phase_timings_json` ripiega su `mst_loop_seconds`.
 struct phase_timing_profile {
   double total_seconds = 0.0;
   double mst_loop_seconds = 0.0;
@@ -27,6 +30,7 @@ struct phase_timing_profile {
   double algorithm_seconds = -1.0;
 };
 
+/// Telemetria opzionale specifica del backend (retry sul DSU, collisioni `atomicMin`, overhead kernel...) per analisi più fini dei tempi di fase.
 struct telemetry_details_profile {
   double scan_time_pure_seconds = 0.0;
   double reduce_time_pure_seconds = 0.0;
@@ -39,6 +43,7 @@ struct telemetry_details_profile {
   double unattributed_residual_seconds = 0.0;
 };
 
+/// Escaping minimo per infilare una stringa in un valore JSON fra virgolette (backslash, virgolette, newline/CR/tab).
 inline std::string json_escape(std::string_view value) {
   std::string escaped;
   escaped.reserve(value.size());
@@ -69,6 +74,7 @@ inline std::string json_escape(std::string_view value) {
   return escaped;
 }
 
+/// Scrive il report su disco (creando le directory mancanti); `false` su qualsiasi errore.
 inline bool write_report(const std::filesystem::path &path,
                          std::string_view report) {
   std::error_code error;
@@ -88,6 +94,7 @@ inline bool write_report(const std::filesystem::path &path,
   return static_cast<bool>(stream);
 }
 
+/// Variabile d'ambiente o stringa vuota se non definita (es. `SLURM_JOB_ID` fuori da SLURM) — niente puntatori nulli nel report.
 inline std::string env_or_empty(const char *name) {
   if (const char *value = std::getenv(name)) {
     return value;
@@ -95,6 +102,7 @@ inline std::string env_or_empty(const char *name) {
   return {};
 }
 
+/// Nome host della macchina (per distinguere i nodi nei benchmark distribuiti); `"unknown"` se la syscall fallisce.
 inline std::string hostname() {
   std::array<char, 256> buffer{};
   if (gethostname(buffer.data(), buffer.size()) == 0) {
@@ -104,6 +112,7 @@ inline std::string hostname() {
   return "unknown";
 }
 
+/// Timestamp ISO 8601 / UTC, per datare i report in modo confrontabile fra esecuzioni e nodi.
 inline std::string utc_timestamp() {
   const auto now = std::chrono::system_clock::now();
   const std::time_t time = std::chrono::system_clock::to_time_t(now);
@@ -119,6 +128,7 @@ inline std::string utc_timestamp() {
   return out.str();
 }
 
+/// Frammento JSON coi metadati comuni a tutti i report: backend, esito, timestamp, hostname, ID job SLURM.
 inline std::string common_metadata_json(std::string_view backend,
                                         bool success) {
   std::ostringstream out;
@@ -131,6 +141,8 @@ inline std::string common_metadata_json(std::string_view backend,
   return out.str();
 }
 
+/// Blocco JSON `"timings"`: `algorithm_seconds` ripiega su `mst_loop_seconds`
+/// se non misurato a parte; `backend_fields` accoda campi specifici del backend allo stesso oggetto.
 inline void write_phase_timings_json(std::ostream &out,
                                      const phase_timing_profile &timings,
                                      std::string_view backend_fields = {}) {
@@ -156,10 +168,12 @@ inline void write_phase_timings_json(std::ostream &out,
   out << "  }";
 }
 
+/// I report vogliono la telemetria in millisecondi, internamente è in secondi.
 inline double seconds_to_milliseconds(double seconds) {
   return seconds * 1000.0;
 }
 
+/// Blocco JSON opzionale `"telemetry_details"`, tempi convertiti in millisecondi per leggibilità.
 inline void
 write_telemetry_details_json(std::ostream &out,
                              const telemetry_details_profile &telemetry) {

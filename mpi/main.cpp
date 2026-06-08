@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -19,6 +20,8 @@ namespace mst::backend::mpi {
 
 constexpr int root_rank = 0;
 
+/// Buffer riusati ad ogni round: `local_keys` per i minimi sulla fetta di
+/// archi di questo rank, `reduced_keys` per il risultato dell'`MPI_Allreduce`.
 struct mpi_workspace {
   explicit mpi_workspace(int vertex_count)
       : local_keys(static_cast<std::size_t>(vertex_count),
@@ -35,32 +38,80 @@ struct mpi_workspace {
   std::vector<std::uint64_t> reduced_keys;
 };
 
+/// Inizio (incluso) della fetta di archi `[begin, end)` di un rank: il
+/// rank radice carica il grafo e lo trasmette con `broadcast_graph`, così
+/// ogni processo ne ha una copia completa ma scansiona solo la sua
+/// porzione (`edge_count * rank / size`), dividendo il calcolo senza
+/// dover ripartire i dati arco per arco.
 int edge_begin_for_rank(int edge_count, int rank, int size) {
   return (edge_count * rank) / size;
 }
 
+/// Fine (esclusa) della stessa fetta — l'inizio del blocco successivo.
 int edge_end_for_rank(int edge_count, int rank, int size) {
   return (edge_count * (rank + 1)) / size;
 }
 
-std::vector<int> pack_snapshot(const mst::dsu::parent_snapshot &snapshot) {
+/// Spacchetta gli archi in interi grezzi per la trasmissione: ogni arco
+/// diventa una tripletta (estremo, estremo, peso) in un buffer piatto — MPI
+/// parla solo di tipi primitivi, non dei nostri tipi forti.
+std::vector<int> pack_edges(const std::vector<mst::core::edge> &edges) {
   std::vector<int> packed;
-  packed.reserve(snapshot.parent().size());
-  for (const mst::core::vertex_id vertex : snapshot.parent()) {
-    packed.push_back(vertex.value());
+  packed.reserve(edges.size() * 3);
+  for (const mst::core::edge &edge_value : edges) {
+    packed.push_back(edge_value.u.value());
+    packed.push_back(edge_value.v.value());
+    packed.push_back(edge_value.weight.value());
   }
   return packed;
 }
 
-mst::dsu::parent_snapshot unpack_snapshot(const std::vector<int> &packed) {
-  std::vector<mst::core::vertex_id> parent;
-  parent.reserve(packed.size());
-  for (const int value : packed) {
-    parent.push_back(mst::core::make_vertex_id(value));
+/// Inverso di `pack_edges`: ricostruisce gli archi tipati dalle triplette ricevute.
+std::vector<mst::core::edge> unpack_edges(const std::vector<int> &packed) {
+  std::vector<mst::core::edge> edges;
+  edges.reserve(packed.size() / 3);
+  for (std::size_t index = 0; index + 2 < packed.size(); index += 3) {
+    edges.push_back({mst::core::make_vertex_id(packed[index]),
+                     mst::core::make_vertex_id(packed[index + 1]),
+                     mst::core::make_edge_weight(packed[index + 2])});
   }
-  return mst::dsu::parent_snapshot{std::move(parent)};
+  return edges;
 }
 
+/// Distribuisce il grafo dal rank radice a tutti gli altri con due
+/// `MPI_Bcast`: prima le dimensioni (vertici, archi), poi gli archi
+/// impacchettati come triplette di interi. Il radice (che ha già caricato
+/// `graph_on_root`) restituisce la propria copia; gli altri rank ricevono
+/// il buffer, lo sciolgono in archi tipati e validano il proprio grafo —
+/// niente più generazione indipendente, una sola sorgente di verità.
+mst::core::validated_graph broadcast_graph(
+    const mst::core::validated_graph *graph_on_root, int rank, MPI_Comm comm) {
+  int dimensions[2] = {0, 0}; // {vertex_count, edge_count}
+  std::vector<int> packed;
+
+  if (rank == root_rank) {
+    dimensions[0] = graph_on_root->vertex_count();
+    dimensions[1] = static_cast<int>(graph_on_root->edges().size());
+    packed = pack_edges(graph_on_root->edges());
+  }
+  MPI_Bcast(dimensions, 2, MPI_INT, root_rank, comm);
+
+  packed.resize(static_cast<std::size_t>(dimensions[1]) * 3);
+  MPI_Bcast(packed.data(), static_cast<int>(packed.size()), MPI_INT, root_rank,
+            comm);
+
+  if (rank == root_rank) {
+    return *graph_on_root;
+  }
+  return mst::core::validate(
+      mst::core::raw_graph{dimensions[0], unpack_edges(packed)});
+}
+
+/// Scansiona la fetta `[begin, end)` di archi di questo rank e aggiorna
+/// `best_keys` con il minimo per componente, con la stessa `candidate_key`
+/// a 64 bit usata dagli altri backend (confronto intero, pareggi risolti
+/// per indice più basso). Il DSU è già completo e sincronizzato in locale,
+/// quindi non serve comunicazione per trovare le radici.
 void local_best_candidate_keys(
     const mst::core::validated_graph &graph,
     mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu, int begin,
@@ -85,16 +136,12 @@ void local_best_candidate_keys(
   }
 }
 
-mst::execution::mpi_round<mst::execution::parents_broadcasted>
-broadcast_parents(mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
-                  int root_rank_value, MPI_Comm comm) {
-  std::vector<int> packed = pack_snapshot(dsu.compressed_snapshot());
-  MPI_Bcast(packed.data(), static_cast<int>(packed.size()), MPI_INT,
-            root_rank_value, comm);
-  dsu.set_parent_snapshot(unpack_snapshot(packed));
-  return {};
-}
-
+/// Fase 1 (locale): calcola i minimi sulla fetta di archi di questo rank.
+/// Il parametro `mpi_round<parents_broadcasted>` è solo un token di tipo:
+/// segnala che il DSU è già sincronizzato fra i rank quando si entra in
+/// questa fase (lo è per costruzione: stesso `MPI_Allreduce` e stesse
+/// contrazioni in ordine identico, vedi `apply_contractions`), nello
+/// stesso spirito dei concept in `contracts.hpp`.
 const std::vector<std::uint64_t> &compute_local_minima(
     const mst::core::validated_graph &graph,
     mst::dsu::disjoint_set<mst::core::uncompressed_parents> &dsu,
@@ -106,6 +153,10 @@ const std::vector<std::uint64_t> &compute_local_minima(
   return workspace.local_keys;
 }
 
+/// Fase 2 (collettiva): un solo `MPI_Allreduce` con `MPI_MIN` su
+/// `MPI_UINT64_T` riduce e ridistribuisce i minimi globali in un colpo
+/// solo — il minimo bit a bit sulla `candidate_key` coincide col minimo
+/// "logico" (peso, indice), niente da fare di custom.
 const std::vector<std::uint64_t> &reduce_minima(
     const std::vector<std::uint64_t> &local_keys, mpi_workspace &workspace,
     const mst::core::validated_graph &graph, MPI_Comm comm,
@@ -117,6 +168,11 @@ const std::vector<std::uint64_t> &reduce_minima(
   return workspace.reduced_keys;
 }
 
+/// Fase 3: ogni rank applica le stesse contrazioni in locale, in modo
+/// indipendente ma deterministico — partendo dallo stesso stato e dallo
+/// stesso `best_keys`, tutti arrivano allo stesso risultato senza
+/// scambiarsi nulla ("embarrassingly replicated": si ripete un lavoro O(V)
+/// pur di non dover distribuire/raccogliere gli archi ammessi).
 int apply_contractions(
     const std::vector<std::uint64_t> &best_keys,
     const mst::core::validated_graph &graph,
@@ -170,9 +226,16 @@ int main(std::int32_t argc, char **argv) {
   const mst::app::app_config &config = parsed.config;
 
   const double total_start = MPI_Wtime();
-  const mst::app::loaded_graph loaded = mst::app::load_graph(config);
-  const mst::app::selected_graph &selected = loaded.selected;
-  const mst::core::validated_graph &graph = loaded.graph;
+  // Solo il rank radice carica (o genera) il grafo: gli altri lo ricevono
+  // via `broadcast_graph`, così la sorgente di verità è una sola e i dati
+  // viaggiano sul canale MPI invece di essere ricostruiti N volte.
+  std::optional<mst::app::loaded_graph> loaded_on_root;
+  if (rank == root_rank) {
+    loaded_on_root = mst::app::load_graph(config);
+  }
+  const mst::core::validated_graph graph = broadcast_graph(
+      rank == root_rank ? &loaded_on_root->graph : nullptr, rank,
+      MPI_COMM_WORLD);
   mst::dsu::disjoint_set<mst::core::uncompressed_parents> dsu(
       graph.vertex_count());
   std::vector<mst::core::mst_edge> mst_edges;
@@ -185,6 +248,10 @@ int main(std::int32_t argc, char **argv) {
   double contract_seconds = 0.0;
   const double mst_start = MPI_Wtime();
 
+  // Ogni rank ha l'intero grafo e un proprio DSU, ma scansiona solo la sua
+  // fetta di archi; un solo MPI_Allreduce combina i minimi e tutti i rank
+  // ne escono già allineati (vedi `apply_contractions`). Anche qui le
+  // componenti dimezzano ad ogni round buono: O(log V) round.
   while (remaining_components > 1) {
     ++rounds;
     const int begin =
@@ -268,7 +335,7 @@ int main(std::int32_t argc, char **argv) {
     report << mst::reporting::common_metadata_json(
                   "mpi", all_verification_success != 0)
            << ",\n";
-    report << mst::app::graph_metadata_json(selected) << ",\n";
+    report << mst::app::graph_metadata_json(loaded_on_root->selected) << ",\n";
     report << mst::app::configuration_metadata_json(config) << ",\n";
     std::ostringstream backend_timing_fields;
     backend_timing_fields << "    \"backend\": {\n";

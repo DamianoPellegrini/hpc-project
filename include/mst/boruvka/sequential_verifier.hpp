@@ -11,6 +11,9 @@
 
 namespace mst::boruvka {
 
+/// Esito del confronto fra backend parallelo e riferimento sequenziale:
+/// oltre al booleano, tiene i valori attesi/ottenuti per stamparli o
+/// metterli nel report in caso di discrepanza.
 struct verification_result {
   bool success = false;
   int expected_total_weight = 0;
@@ -19,6 +22,14 @@ struct verification_result {
   std::size_t actual_edge_count = 0;
 };
 
+/// Boruvka sequenziale "di riferimento": fa da oracolo per verificare i
+/// backend paralleli. Stessa logica di tutti gli altri, solo a un thread:
+/// scansiona gli archi proponendo per ogni componente il vicino più
+/// leggero (`consider_candidate` risolve i pareggi in modo deterministico),
+/// poi ogni componente prova a fondersi col proprio candidato. Si ferma
+/// quando non resta che una componente o un round non ammette nulla
+/// (grafo non connesso). O(log V) round, perché ogni round dimezza
+/// (almeno) le componenti.
 inline result sequential_cpu_mst(const mst::core::validated_graph &graph) {
   mst::dsu::disjoint_set<mst::core::uncompressed_parents> dsu(
       graph.vertex_count());
@@ -28,6 +39,8 @@ inline result sequential_cpu_mst(const mst::core::validated_graph &graph) {
     std::vector<mst::core::maybe_candidate_edge> best(
         static_cast<std::size_t>(graph.vertex_count()));
 
+    // Scansione: ogni arco fra componenti distinte si propone come
+    // candidato per entrambe.
     for (std::size_t index = 0; index < graph.edges().size(); ++index) {
       const mst::core::edge &edge = graph.edges()[index];
       const mst::core::component_id left = dsu.find(edge.u);
@@ -42,6 +55,8 @@ inline result sequential_cpu_mst(const mst::core::validated_graph &graph) {
       mst::core::consider_candidate(best[right.index()], edge, edge_index);
     }
 
+    // Contrazione: ogni candidato prova a fondere le sue componenti;
+    // `changed` resta falso se non si ammette nulla, e allora ci si ferma.
     bool changed = false;
     for (const auto &candidate : best) {
       if (!candidate) {
@@ -62,6 +77,9 @@ inline result sequential_cpu_mst(const mst::core::validated_graph &graph) {
   return output;
 }
 
+/// Confronta il backend col riferimento sequenziale su peso totale e
+/// numero di archi (non sull'identità arco-per-arco: con pesi a parità
+/// possono esistere più MST validi e diversi, ma tutti corretti).
 inline verification_result verify_against_sequential_cpu(
     const mst::core::validated_graph &graph,
     const std::vector<mst::core::mst_edge> &actual_edges,
@@ -79,6 +97,7 @@ inline verification_result verify_against_sequential_cpu(
   };
 }
 
+/// Scrive l'esito della verifica nel report JSON.
 inline void write_verification_json(std::ostream &out,
                                     verification_result verification) {
   out << "  \"verification\": {\n";

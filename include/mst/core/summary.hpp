@@ -9,7 +9,8 @@
 
 namespace mst::core {
 
-/// Render a stable textual summary of the admitted MST edges.
+/// Riassunto testuale dell'MST, ordinato per estremi normalizzati (poi peso):
+/// così l'output è confrontabile fra backend, indipendentemente dall'ordine di scoperta.
 inline std::string mst_summary(const std::vector<mst_edge> &edges,
                                int total_weight) {
   std::vector<mst_edge> sorted = edges;

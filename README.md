@@ -79,8 +79,8 @@ Set `--report` to write JSON timing reports:
 ./build/openmp/openmp_app --graph tie --report results/openmp_tie.json
 ```
 
-CUDA accepts `--cuda-host-memory pageable|pinned|zero_copy`; pinned is the
-default unless changed at configure time.
+CUDA host edge memory mode (`pageable|pinned|zero_copy`) is fixed at configure
+time via `MST_CUDA_HOST_MEMORY_DEFAULT`; pinned is the default.
 
 For benchmark builds without visualization:
 

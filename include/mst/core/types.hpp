@@ -7,7 +7,12 @@
 
 namespace mst::core {
 
-/// Vertex identifier inside a validated graph.
+// Tipi forti attorno a interi grezzi (il compilatore blocca, es., uno
+// scambio fra `edge_index` e `vertex_id`) e tag vuoti come `raw`/`validated`
+// che codificano nel tipo stesso lo stato di un dato (typestate), spostando
+// dei controlli dal runtime al tempo di compilazione.
+
+/// Identificatore di vertice all'interno di un grafo validato.
 struct vertex_id {
   constexpr vertex_id() noexcept = default;
   explicit constexpr vertex_id(int raw_value) noexcept : value_(raw_value) {}
@@ -33,7 +38,7 @@ private:
   }
 };
 
-/// Component identifier derived from a DSU root.
+/// Identificatore di componente, derivato dalla radice nel DSU.
 struct component_id {
   constexpr component_id() noexcept = default;
   explicit constexpr component_id(int raw_value) noexcept : value_(raw_value) {}
@@ -60,7 +65,7 @@ private:
   }
 };
 
-/// MPI rank identifier for distributed partition ownership.
+/// Identificatore di rank MPI, usato per la suddivisione distribuita dei dati.
 struct rank_id {
   int value;
 
@@ -74,7 +79,7 @@ struct rank_id {
   }
 };
 
-/// Stable index into an edge collection.
+/// Indice stabile all'interno di una collezione di archi.
 struct edge_index {
   constexpr edge_index() noexcept = default;
   explicit constexpr edge_index(std::size_t raw_value) noexcept
@@ -95,7 +100,7 @@ private:
   std::size_t value_ = 0;
 };
 
-/// Number of edges in a graph or backend-owned slice.
+/// Numero di archi in un grafo o in una porzione di proprietà di un backend.
 struct edge_count {
   constexpr edge_count() noexcept = default;
   explicit constexpr edge_count(std::size_t raw_value) noexcept
@@ -116,7 +121,7 @@ private:
   }
 };
 
-/// Number of vertices requested for generated graphs.
+/// Numero di vertici richiesto per i grafi generati.
 struct graph_vertex_count {
   constexpr graph_vertex_count() noexcept = default;
   explicit constexpr graph_vertex_count(int raw_value) noexcept
@@ -138,7 +143,7 @@ private:
   }
 };
 
-/// Deterministic key for identifying an edge across backends.
+/// Chiave deterministica per identificare un arco fra backend diversi.
 struct edge_key {
   constexpr edge_key() noexcept = default;
   explicit constexpr edge_key(std::uint64_t raw_value) noexcept
@@ -159,7 +164,8 @@ private:
   }
 };
 
-/// Packed candidate ordering key: lower weight, then lower edge index.
+/// Chiave d'ordinamento dei candidati impacchettata: prima il peso minore,
+/// poi, a parità di peso, l'indice d'arco minore.
 struct candidate_key {
   constexpr candidate_key() noexcept
       : value_(std::numeric_limits<std::uint64_t>::max()) {}
@@ -185,7 +191,7 @@ private:
   }
 };
 
-/// Seed used by deterministic generated graph examples.
+/// Seed usato dagli esempi di grafi generati in modo deterministico.
 struct random_seed {
   constexpr random_seed() noexcept = default;
   explicit constexpr random_seed(std::uint64_t raw_value) noexcept
@@ -207,7 +213,8 @@ private:
   }
 };
 
-/// Logical partition identifier for backend-owned slices.
+/// Identificatore logico di partizione per le porzioni di proprietà di un
+/// backend.
 struct partition_id {
   int value;
 
@@ -222,7 +229,7 @@ struct partition_id {
   }
 };
 
-/// Boruvka round counter.
+/// Contatore del round di Boruvka.
 struct round_index {
   int value;
 
@@ -236,7 +243,7 @@ struct round_index {
   }
 };
 
-/// Edge weight used by all backends.
+/// Peso di un arco, usato da tutti i backend.
 struct edge_weight {
   constexpr edge_weight() noexcept = default;
   explicit constexpr edge_weight(int raw_value) noexcept : value_(raw_value) {}
@@ -258,19 +265,20 @@ private:
   }
 };
 
-/// Graph state before input validation.
+/// Stato del grafo prima della validazione dell'input.
 struct raw {};
-/// Graph state after vertex-bound validation.
+/// Stato del grafo dopo la validazione dei limiti sui vertici.
 struct validated {};
-/// Local component state before a backend-wide synchronization point.
+/// Stato locale delle componenti prima di un punto di sincronizzazione fra
+/// backend.
 struct unsynchronized {};
-/// Component state after synchronization.
+/// Stato delle componenti dopo la sincronizzazione.
 struct synchronized_state {};
-/// DSU parents before path compression.
+/// Genitori del DSU prima della compressione dei cammini.
 struct uncompressed_parents {};
-/// DSU parents after path compression.
+/// Genitori del DSU dopo la compressione dei cammini.
 struct compressed_parents {};
-/// Forest state guaranteed to contain no admitted cycle.
+/// Stato della foresta garantito privo di cicli ammessi.
 struct acyclic {};
 
 inline constexpr edge_weight infinite_weight{std::numeric_limits<int>::max()};

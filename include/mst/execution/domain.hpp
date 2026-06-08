@@ -2,24 +2,25 @@
 
 namespace mst::execution {
 
-/// Shared-memory CPU thread execution domain.
+/// Dominio di esecuzione a thread su CPU a memoria condivisa (OpenMP).
 struct cpu_thread_domain {};
-/// Distributed MPI process execution domain.
+/// Dominio di esecuzione a processi MPI distribuiti.
 struct mpi_process_domain {};
-/// CUDA block-level execution domain.
+/// Dominio di esecuzione a livello di block CUDA.
 struct gpu_block_domain {};
-/// CUDA warp-level execution domain.
+/// Dominio di esecuzione a livello di warp CUDA.
 struct gpu_warp_domain {};
 
-/// MPI round after parent broadcast.
+/// Tag di fase per `mpi_round`: dopo il broadcast dei genitori del DSU.
 struct parents_broadcasted {};
-/// MPI round after local minima computation.
+/// Tag di fase: dopo il calcolo dei minimi locali su ogni rank.
 struct local_minima_computed {};
-/// MPI round after minima reduction to the root.
+/// Tag di fase: dopo la riduzione (Allreduce) in minimi globali.
 struct minima_reduced {};
-/// MPI round after parent synchronization.
+/// Tag di fase: dopo la sincronizzazione dei genitori fra rank.
 struct parents_synchronized {};
 
+/// Contatore di round MPI: il tag `phase_t` segna a livello di tipo il punto della pipeline in cui ci si trova.
 template <class phase_t> struct mpi_round {
   int value = 0;
 };

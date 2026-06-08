@@ -13,8 +13,12 @@
 
 namespace mst::core {
 
+/// Parametri validati per un grafo casuale connesso: costruttore privato,
+/// si passa per `create` che controlla i vincoli (vertici, peso, archi extra
+/// disponibili) e ritorna `std::nullopt` se non tornano.
 class random_connected_graph_config {
 public:
+  /// Valida i parametri e costruisce la config, o `std::nullopt` se non vanno bene.
   static std::optional<random_connected_graph_config>
   create(graph_vertex_count vertices, edge_count extra_edges,
          random_seed seed, edge_weight max_weight) {
@@ -53,6 +57,7 @@ private:
   edge_weight max_weight_;
 };
 
+/// Triangolo a 3 vertici: caso minuscolo, verificabile a mano.
 inline raw_graph make_tiny_triangle_graph() {
   return raw_graph{
       3,
@@ -64,6 +69,7 @@ inline raw_graph make_tiny_triangle_graph() {
   };
 }
 
+/// Quadrato con diagonale: un ciclo e una "scorciatoia" di peso minimo, per testare la scelta fra archi concorrenti.
 inline raw_graph make_square_with_diagonal_graph() {
   return raw_graph{
       4,
@@ -77,6 +83,7 @@ inline raw_graph make_square_with_diagonal_graph() {
   };
 }
 
+/// Pesi tutti uguali apposta: verifica che ogni backend risolva i pareggi allo stesso modo (vince l'indice più basso).
 inline raw_graph make_equal_weight_tie_graph() {
   return raw_graph{
       5,
@@ -90,8 +97,11 @@ inline raw_graph make_equal_weight_tie_graph() {
   };
 }
 
+/// Alias del grafo di test condiviso, come esempio "sparso" nel catalogo.
 inline raw_graph make_sparse_12_vertex_graph() { return make_test_graph(); }
 
+/// Grafo denso a 16 vertici: un anello più archi a distanza 2-4, tutto
+/// deterministico (niente generatore casuale).
 inline raw_graph make_dense_16_vertex_graph() {
   std::vector<edge> edges;
   edges.reserve(40);
@@ -112,6 +122,8 @@ inline raw_graph make_dense_16_vertex_graph() {
   return raw_graph{16, std::move(edges)};
 }
 
+/// Coppia di vertici (normalizzata min, max) impacchettata in una chiave a
+/// 64 bit: comoda per buttarla in un `unordered_set` e scartare i duplicati.
 inline std::uint64_t encoded_undirected_edge_key(int left, int right) noexcept {
   const auto endpoints = std::minmax(left, right);
   return (static_cast<std::uint64_t>(
@@ -120,12 +132,16 @@ inline std::uint64_t encoded_undirected_edge_key(int left, int right) noexcept {
              static_cast<std::uint32_t>(endpoints.second));
 }
 
+/// Config di default per i benchmark su grafo grande: 32768 vertici, ~200k archi extra, seed fisso, pesi fino a 10000.
 inline random_connected_graph_config default_large_random_graph_config() {
   return *random_connected_graph_config::create(
       make_graph_vertex_count(32768), make_edge_count(196608),
       make_random_seed(886261), make_edge_weight(10000));
 }
 
+/// Grafo casuale ma connesso, riproducibile a parità di seed: prima uno
+/// spanning tree casuale (garantisce la connessione), poi `extra_edges`
+/// archi in più scartando duplicati e auto-anelli via `encoded_undirected_edge_key`.
 inline raw_graph
 make_random_connected_graph(const random_connected_graph_config &config) {
   std::mt19937_64 generator(config.seed().value());

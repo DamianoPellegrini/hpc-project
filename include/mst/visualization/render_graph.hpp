@@ -34,27 +34,32 @@ inline constexpr const char *muted_violet = "\x1b[38;5;103m";
 inline constexpr const char *muted_sand = "\x1b[38;5;137m";
 inline constexpr std::string_view edge_glyph = "•";
 
+/// Coordinate continue del layout, prima della proiezione sulla griglia del terminale.
 struct point {
   double x;
   double y;
 };
 
+/// Coordinate intere di una cella, dopo la proiezione di un `point`.
 struct canvas_point {
   int x;
   int y;
 };
 
+/// Dimensioni rilevate del terminale (colonne x righe).
 struct viewport_size {
   int width;
   int height;
 };
 
+/// Una cella della griglia: testo, colore ANSI, grassetto.
 struct cell {
   std::string text = " ";
   const char *color = reset;
   bool is_bold = false;
 };
 
+/// Griglia di celle con colori ANSI: le primitive di disegno scrivono qui, `render` la emette su uno stream.
 class canvas {
 public:
   canvas(int width, int height)
@@ -96,6 +101,7 @@ public:
     }
   }
 
+  /// Segmento fra due punti con Bresenham (aritmetica intera, nessuna trigonometria); `sx`/`sy` gestiscono qualunque direzione.
   void draw_line(int x0, int y0, int x1, int y1, std::string_view text,
                  const char *color, bool is_bold = false) {
     const int dx = std::abs(x1 - x0);
@@ -122,6 +128,8 @@ public:
     }
   }
 
+  /// Emette la griglia riga per riga: `emit_style` scrive l'escape ANSI solo
+  /// quando lo stile cambia, per non ripeterlo a ogni carattere.
   void render(std::ostream &out) const {
     const char *current_color = reset;
     bool current_bold = false;
@@ -163,6 +171,8 @@ private:
   std::vector<cell> cells_;
 };
 
+/// Posizione di partenza: i vertici distribuiti su una circonferenza in base
+/// al loro indice — punto di partenza deterministico per `make_force_layout`.
 inline point make_initial_point(int vertex, int vertex_count) {
   constexpr double pi = 3.14159265358979323846;
   const double angle = (2.0 * pi * static_cast<double>(vertex)) /
@@ -170,6 +180,9 @@ inline point make_initial_point(int vertex, int vertex_count) {
   return point{std::cos(angle), std::sin(angle)};
 }
 
+/// Layout "force-directed" alla Fruchterman-Reingold: parte dal cerchio di
+/// `make_initial_point` e itera fra repulsione (allontana tutte le coppie) e
+/// attrazione lungo gli archi, con una "temperatura" che si raffredda per farlo convergere.
 inline std::vector<point>
 make_force_layout(const mst::core::validated_graph &graph) {
   const int vertex_count = graph.vertex_count();
@@ -256,6 +269,7 @@ make_force_layout(const mst::core::validated_graph &graph) {
   return positions;
 }
 
+/// Layout continuo -> griglia: bounding box, normalizzazione in [0, 1] e riscalatura nell'area disegnabile (margini esclusi).
 inline std::vector<canvas_point>
 project_layout(const std::vector<point> &layout, int width, int height) {
   double min_x = std::numeric_limits<double>::max();
@@ -289,14 +303,19 @@ project_layout(const std::vector<point> &layout, int width, int height) {
   return projected;
 }
 
+/// Stessi due archi come non orientati (estremi normalizzati), anche se `u`/`v` sono scambiati.
 inline bool same_undirected_edge(const mst::core::edge &left,
                                  const mst::core::edge &right) noexcept {
   return mst::core::normalized_endpoints(left) ==
          mst::core::normalized_endpoints(right);
 }
 
+/// Etichetta di un vertice: il suo indice, come stringa.
 inline std::string node_label(int vertex) { return std::to_string(vertex); }
 
+/// Colore "spento" per un arco fuori MST: hash deterministico degli estremi
+/// normalizzati sulla tavolozza, così archi diversi tendono a colori diversi
+/// e il risultato resta riproducibile.
 inline const char *non_mst_edge_color(const mst::core::edge &edge_value) {
   constexpr const char *palette[] = {
       muted_gray, muted_blue, muted_teal, muted_violet, muted_sand,
@@ -308,6 +327,7 @@ inline const char *non_mst_edge_color(const mst::core::edge &edge_value) {
   return palette[palette_index];
 }
 
+/// Vero se l'arco è (come non orientato) uno di quelli ammessi nell'MST — decide se va in verde o nel colore "spento".
 inline bool is_mst_edge(const mst::core::edge &edge_value,
                         const std::vector<mst::core::mst_edge> &mst_edges) {
   return std::any_of(mst_edges.begin(), mst_edges.end(),
@@ -317,6 +337,8 @@ inline bool is_mst_edge(const mst::core::edge &edge_value,
                      });
 }
 
+/// Testo centrato su `center_x` con un riquadro di sfondo intorno: usato per
+/// etichette e pesi, per restare leggibili anche sopra le linee disegnate.
 inline void draw_padded_text(canvas &target, int center_x, int center_y,
                              std::string_view text, int horizontal_padding,
                              const char *color, bool is_bold) {
@@ -327,6 +349,7 @@ inline void draw_padded_text(canvas &target, int center_x, int center_y,
                    color, is_bold);
 }
 
+/// Peso di un arco nel punto medio fra i suoi estremi proiettati, via `draw_padded_text`.
 inline void draw_edge_weight(canvas &target, const canvas_point &from,
                              const canvas_point &to, int weight,
                              int horizontal_padding, const char *color) {
@@ -339,6 +362,8 @@ inline void draw_edge_weight(canvas &target, const canvas_point &from,
                    false);
 }
 
+/// Dimensioni del terminale: prima `ioctl(TIOCGWINSZ)` se interattivo, poi
+/// `COLUMNS`/`LINES` (utili in batch con output rediretto), infine un default ragionevole.
 inline viewport_size detect_viewport_size() {
   constexpr int default_width = 96;
   constexpr int default_height = 28;
@@ -364,6 +389,8 @@ inline viewport_size detect_viewport_size() {
   return viewport_size{default_width, default_height};
 }
 
+/// Disegna gli archi MST oppure non-MST (`draw_mst_edges`): chiamata due
+/// volte, prima per lo sfondo poi per l'MST, così quest'ultimo finisce sopra (verde, grassetto).
 inline void draw_graph_edges(canvas &target,
                              const mst::core::validated_graph &graph,
                              const std::vector<canvas_point> &points,
@@ -384,6 +411,7 @@ inline void draw_graph_edges(canvas &target,
   }
 }
 
+/// Etichetta di ogni vertice nella sua posizione, in giallo e grassetto, sopra agli archi.
 inline void draw_graph_vertices(canvas &target,
                                 const mst::core::validated_graph &graph,
                                 const std::vector<canvas_point> &points) {
@@ -394,6 +422,7 @@ inline void draw_graph_vertices(canvas &target,
   }
 }
 
+/// Peso di ogni arco nel suo colore (verde se nell'MST, altrimenti "spento"), al centro dell'arco proiettato.
 inline void
 draw_graph_weights(canvas &target, const mst::core::validated_graph &graph,
                    const std::vector<canvas_point> &points,
@@ -409,6 +438,7 @@ draw_graph_weights(canvas &target, const mst::core::validated_graph &graph,
   }
 }
 
+/// Ordine di disegno per la leggibilità: archi non-MST, poi MST, poi pesi, infine etichette in primo piano.
 inline void
 draw_graph_content(canvas &target, const mst::core::validated_graph &graph,
                    const std::vector<canvas_point> &points,
@@ -419,10 +449,14 @@ draw_graph_content(canvas &target, const mst::core::validated_graph &graph,
   draw_graph_vertices(target, graph, points);
 }
 
+/// Pulisce lo schermo e riporta il cursore in alto a sinistra, prima di ridisegnare.
 inline void clear_terminal(std::ostream &out) {
   out << clear_screen << cursor_home;
 }
 
+/// Punto d'ingresso: se il grafo è abbastanza piccolo calcola layout,
+/// proiezione e disegno con l'MST in evidenza; oltre `max_rendered_vertices`/`max_rendered_edges`
+/// si limita a un riepilogo numerico (l'ASCII diventerebbe illeggibile e costoso).
 inline void
 render_graph_with_mst(const mst::core::validated_graph &graph,
                       const std::vector<mst::core::mst_edge> &mst_edges,

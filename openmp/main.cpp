@@ -21,6 +21,8 @@
 
 namespace mst::backend::openmp {
 
+/// Tempi per fase (scansione, riduzione, contrazione, ...) più i retry per
+/// contesa sul DSU: alimenta il report JSON.
 struct openmp_profile {
   double candidate_reset_seconds = 0.0;
   double scan_seconds = 0.0;
@@ -49,6 +51,10 @@ struct openmp_profile {
   }
 };
 
+/// Memoria di lavoro pre-allocata e riusata ad ogni round, per non allocare
+/// nel ciclo caldo. Ogni thread ha la sua riga in `local_keys_by_thread` e
+/// in `local_edges`/`local_weights`: scrivendo solo nella propria area non
+/// serve sincronizzazione, e si combina tutto in un secondo momento.
 struct openmp_workspace {
   openmp_workspace(int vertex_count_value, int thread_capacity_value)
       : vertex_count(vertex_count_value),
@@ -87,6 +93,17 @@ struct openmp_workspace {
   std::vector<int> local_weights;
 };
 
+/// Fasi 1+2: scansione e riduzione dei minimi locali.
+///
+/// Il "minimo" di una componente è una `candidate_key` a 64 bit (peso nei
+/// 32 bit alti, indice arco nei bassi): confrontarle è un confronto intero
+/// che risolve i pareggi a favore dell'indice più basso, garantendo lo
+/// stesso MST indipendentemente dal numero di thread.
+///
+/// Ogni thread aggiorna con `std::min` il proprio array locale leggendo le
+/// componenti da uno snapshot "congelato" (niente sincronizzazione né
+/// interferenze con le contrazioni in corso); alla fine si riduce tutto in
+/// un unico `best_keys` globale, il candidato ufficiale per la contrazione.
 const std::vector<std::uint64_t> &
 local_best_candidate_keys(const mst::core::validated_graph &graph,
                           const mst::dsu::parent_snapshot &snapshot,
@@ -106,6 +123,9 @@ local_best_candidate_keys(const mst::core::validated_graph &graph,
     auto &local =
         workspace.local_keys_by_thread[static_cast<std::size_t>(thread)];
 
+    // Ogni thread scansiona una porzione disgiunta degli archi (suddivisione
+    // statica di "omp for") e tiene traccia, senza alcuna sincronizzazione,
+    // del proprio miglior candidato per ciascuna componente che incontra.
 #pragma omp for
     for (std::size_t index = 0; index < graph.edges().size(); ++index) {
       const mst::core::edge &edge = graph.edges()[index];
@@ -132,6 +152,8 @@ local_best_candidate_keys(const mst::core::validated_graph &graph,
 
   const auto reduce_start = clock::now();
 
+  // Ogni iterazione legge la stessa "colonna" (componente) da tutte le
+  // righe per-thread e ne tiene il minimo: zero scritture condivise.
 #pragma omp parallel for
   for (int component = 0; component < workspace.vertex_count; ++component) {
     std::uint64_t global = mst::core::empty_candidate_key.value();
@@ -149,6 +171,13 @@ local_best_candidate_keys(const mst::core::validated_graph &graph,
   return workspace.best_keys;
 }
 
+/// Fase 3: contrazione parallela. Più componenti possono puntare allo
+/// stesso arco, o a due archi che diventano ridondanti se applicati in un
+/// certo ordine — per questo l'arbitraggio vero passa per
+/// `parallel_disjoint_set::unite` (CAS lock-free): solo il primo thread che
+/// aggancia le radici ammette l'arco, gli altri si ritirano con `nullopt`.
+/// Ogni thread accumula in righe separate del workspace, unite poi in
+/// sequenza; il conteggio totale usa una `reduction` di OpenMP.
 int apply_contractions_parallel(
     const std::vector<std::uint64_t> &best_keys,
     const mst::core::validated_graph &graph,
@@ -171,6 +200,9 @@ int apply_contractions_parallel(
     auto &edges = workspace.local_edges[static_cast<std::size_t>(thread)];
     int &weight = workspace.local_weights[static_cast<std::size_t>(thread)];
 
+    // Ogni componente con un candidato valido tenta la fusione; il DSU
+    // lock-free arbitra eventuali conflitti tra thread che propongono lo
+    // stesso arco o archi in conflitto.
 #pragma omp for
     for (int index = 0; index < candidate_count; ++index) {
       const std::uint64_t key = best_keys[static_cast<std::size_t>(index)];
@@ -194,6 +226,7 @@ int apply_contractions_parallel(
   profile.contract_seconds +=
       std::chrono::duration<double>(clock::now() - contract_start).count();
 
+  // Merge sequenziale: ricompone gli archi e i pesi parziali di ogni thread.
   const auto merge_start = clock::now();
   for (int thread = 0; thread < workspace.thread_capacity; ++thread) {
     total_weight += workspace.local_weights[static_cast<std::size_t>(thread)];
@@ -205,6 +238,8 @@ int apply_contractions_parallel(
   return admitted_count;
 }
 
+/// Fase 4: ogni thread comprime un vertice sulla sua radice corrente —
+/// scritture indipendenti, zero sincronizzazione, perfettamente parallelo.
 void compress_all_parallel(mst::dsu::parallel_disjoint_set &dsu,
                            int vertex_count, openmp_profile &profile) {
   using clock = std::chrono::high_resolution_clock;
@@ -246,6 +281,9 @@ int main(int argc, char **argv) {
   openmp_workspace workspace(graph.vertex_count(), omp_get_max_threads());
 
   const auto mst_start = clock::now();
+  // Ogni round: snapshot del DSU -> minimi locali -> riduzione -> contrazione
+  // lock-free -> compressione. Le componenti dimezzano ad ogni round buono
+  // (O(log V) round totali), e si esce prima se un round non ammette nulla.
   while (remaining_components > 1) {
     ++rounds;
     const mst::dsu::parent_snapshot snapshot = dsu.snapshot();
