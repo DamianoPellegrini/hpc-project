@@ -4,94 +4,47 @@
 //   typst compile --root . report/main.typ report/main.pdf
 //
 // The leading slash in each path is project-root-relative, not filesystem-root.
+// Ogni file è il CSV prodotto da uno script Slurm (vedi scripts/slurm/),
+// schema: backend,vertices,edges,density,seed,resources,overhead_seconds,
+// exec_seconds,total_seconds,verified.
 
-#let report-files = (
-  "/results/cuda_dense16_hmcompile_default_27786.json",
-  "/results/cuda_random_v32768_e196608_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_square_hmcompile_default_27786.json",
-  "/results/cuda_test_hmcompile_default_27786.json",
-  "/results/cuda_tie_hmcompile_default_27786.json",
-  "/results/cuda_triangle_hmcompile_default_27786.json",
-  "/results/mpi_dense16_np2_27785.json",
-  "/results/mpi_random_v32768_e196608_s886261_w10000_np2_27788.json",
-  "/results/mpi_square_np2_27785.json",
-  "/results/mpi_test_np2_27785.json",
-  "/results/mpi_tie_np2_27785.json",
-  "/results/mpi_triangle_np2_27785.json",
-  "/results/openmp_dense16_t4_27784.json",
-  "/results/openmp_random_v32768_e196608_s886261_w10000_t4_27787.json",
-  "/results/openmp_square_t4_27784.json",
-  "/results/openmp_test_t4_27784.json",
-  "/results/openmp_tie_t4_27784.json",
-  "/results/openmp_triangle_t4_27784.json",
+#let result-files = (
+  "/results/mpi_28093.csv",
+  "/results/openmp_28092.csv",
+  "/results/cuda_28094.csv",
+  "/results/sequential_28140.csv",
 )
 
-#let random-sweep-files = (
-  "/results/mpi_random_v32768_e32768_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e65536_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e131072_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e196608_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e393216_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e786432_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e1572864_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e3145728_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e6291456_s886261_w10000_np2_27788.json",
-  "/results/mpi_random_v32768_e12582912_s886261_w10000_np2_27788.json",
-  "/results/openmp_random_v32768_e32768_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e65536_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e131072_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e196608_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e393216_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e786432_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e1572864_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e3145728_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e6291456_s886261_w10000_t4_27787.json",
-  "/results/openmp_random_v32768_e12582912_s886261_w10000_t4_27787.json",
-  "/results/cuda_random_v32768_e32768_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e65536_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e131072_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e196608_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e393216_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e786432_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e1572864_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e3145728_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e6291456_s886261_w10000_hmcompile_default_27789.json",
-  "/results/cuda_random_v32768_e12582912_s886261_w10000_hmcompile_default_27789.json",
-)
+#let load-csv(path) = csv(path, row-type: dictionary).map(row => (
+  backend: row.backend,
+  vertices: int(row.vertices),
+  edges: int(row.edges),
+  density: float(row.density),
+  seed: int(row.seed),
+  resources: int(row.resources),
+  overhead: float(row.overhead_seconds),
+  exec: float(row.exec_seconds),
+  total: float(row.total_seconds),
+  verified: row.verified,
+))
+
+#let runs = result-files.map(load-csv).flatten()
 
 #let backends = ("mpi", "openmp", "cuda")
-#let graphs = ("triangle", "square", "tie", "test", "dense16", "random")
 
-#let load-report(path) = {
-  let raw = json(path)
-  (
-    path: path,
-    backend: raw.backend,
-    graph: raw.graph.name,
-    vertices: raw.graph.vertex_count,
-    edges: raw.graph.edge_count,
-    total: raw.timings.total_seconds,
-    loop: raw.timings.mst_loop_seconds,
-    algorithm: raw.timings.at("algorithm_seconds", default: raw.timings.mst_loop_seconds),
-    rounds: raw.mst.rounds,
-    mst_edges: raw.mst.selected_edge_count,
-    weight: raw.mst.total_weight,
-    success: raw.success,
-    verified: raw.verification.sequential_cpu_success,
-    raw: raw,
-  )
-}
+#let by-backend(name) = runs.filter(item => item.backend == name)
 
-#let reports = report-files.map(load-report)
-#let random-sweep-runs = random-sweep-files.map(load-report)
-#let random-sweep-projection-densities = (2, 3, 5, 7, 13, 25, 49, 97, 193, 385)
+#let run-at-density(backend, density) = by-backend(backend).filter(item => item.density == density).at(0)
 
-#let by-backend(name) = reports.filter(run => run.backend == name)
-#let by-graph(name) = reports.filter(run => run.graph == name)
-#let run(backend, graph) = reports.filter(item => item.backend == backend and item.graph == graph).at(0)
-#let random-sweep-by-backend(name) = random-sweep-runs.filter(run => run.backend == name)
+// Densità di riferimento usata per tabelle/grafici a singolo punto: stesso
+// valore (|E|=196608, |V|=32768) della run "random" della versione precedente.
+#let reference-density = 6.0
 
-#let random-runs = backends.map(backend => run(backend, "random"))
+#let reference-runs = backends.map(backend => run-at-density(backend, reference-density))
+
+// Densità della sweep (uguali per i tre backend, vedi RANDOM_EDGES_LIST in
+// scripts/slurm/*.sh): 1, 2, 4, 6, 12, 24, 48, 96, 192, 384.
+#let swept-densities = by-backend("mpi").map(item => item.density)
 
 #let duration(seconds) = {
   if seconds < 0.001 {
@@ -107,15 +60,6 @@
 
 #let ratio(value) = str(calc.round(value, digits: 2)) + "x"
 
-#let graph-label(name) = (
-  triangle: "triangle",
-  square: "square",
-  tie: "tie",
-  test: "test",
-  dense16: "dense16",
-  random: "random",
-).at(name)
-
 #let backend-label(name) = (
   mpi: "MPI",
   openmp: "OpenMP",
@@ -123,221 +67,104 @@
 ).at(name)
 
 #let backend-color(name) = (
-  mpi: oklch(66%, 0.09, 238deg),
-  openmp: oklch(69%, 0.10, 72deg),
-  cuda: oklch(66%, 0.10, 150deg),
+  mpi: oklch(60%, 0.16, 255deg),
+  openmp: oklch(68%, 0.16, 55deg),
+  cuda: oklch(62%, 0.16, 145deg),
 ).at(name)
 
-#let workers(item) = {
+// Grado di parallelismo: processi MPI, thread OpenMP, GPU CUDA (vedi colonna
+// `resources` dei CSV e scripts/slurm/*.sh).
+#let worker-count(item) = item.resources
+
+#let workers(item) = (
   if item.backend == "mpi" {
-    str(item.raw.capabilities.world_size) + " processi"
+    str(item.resources) + " processi"
   } else if item.backend == "openmp" {
-    str(item.raw.capabilities.max_threads) + " thread"
+    str(item.resources) + " thread"
   } else {
-    (
-      str(item.raw.capabilities.multiprocessor_count)
-        + " SM, "
-        + str(item.raw.capabilities.max_threads_per_block)
-        + " thread/blocco"
-    )
+    str(item.resources) + " GPU"
   }
+)
+
+#let log2(x) = calc.log(x, base: 2)
+
+// Numero di SM della GPU usata per le run CUDA (NVIDIA L40S).
+#let cuda-sm-count = 142
+
+// Per CUDA, E_p è definita rispetto al proprio grado di parallelismo q (numero
+// di SM, @eq:cuda-sm-speedup): E_p^CUDA = S_p^CUDA / q = (d+1)/(d+log2|V|),
+// dove d = |E|/|V|. Questa forma normalizzata non dipende da q.
+#let cuda-normalized-efficiency(item) = {
+  let d = item.density
+  (d + 1) / (d + log2(item.vertices))
 }
 
-#let worker-count(item) = {
-  if item.backend == "mpi" {
-    item.raw.capabilities.world_size
-  } else if item.backend == "openmp" {
-    item.raw.capabilities.max_threads
-  } else {
-    item.raw.capabilities.multiprocessor_count
-  }
-}
-
-#let edge-density(item) = item.edges / item.vertices
-
-#let platform(item) = {
-  if item.backend == "cuda" {
-    item.raw.capabilities.device_name
-  } else if item.backend == "mpi" {
-    item.raw.capabilities.processor_name
-  } else {
-    item.raw.hostname
-  }
-}
-
-#let timing-value(item, key, fallback: 0.0) = {
-  let backend-timings = item.raw.timings.at("backend", default: (:))
-  item.raw.timings.at(key, default: backend-timings.at(key, default: fallback))
-}
-#let sequential-cpu-seconds(item) = timing-value(item, "sequential_cpu_verification_seconds")
-#let algorithm-seconds(item) = item.algorithm
-#let backend-loop-speedup(item) = sequential-cpu-seconds(item) / item.loop
-#let empirical-speedup(item) = sequential-cpu-seconds(item) / algorithm-seconds(item)
-
-#let timing-breakdown(item) = {
-  let phases = if item.backend == "mpi" {
-    (
-      (
-        phase: "scan",
-        seconds: timing-value(item, "max_local_compute_seconds", fallback: timing-value(item, "scan_seconds")),
-      ),
-      (
-        phase: "reduce",
-        seconds: timing-value(item, "max_reduce_seconds", fallback: timing-value(item, "reduce_seconds")),
-      ),
-      (
-        phase: "contract",
-        seconds: timing-value(item, "max_contract_seconds", fallback: timing-value(item, "contract_seconds")),
-      ),
-    )
-  } else if item.backend == "openmp" {
-    (
-      (phase: "scan", seconds: item.raw.timings.scan_seconds),
-      (phase: "reduce", seconds: item.raw.timings.reduce_seconds),
-      (phase: "contract", seconds: item.raw.timings.contract_seconds),
-      (phase: "compress", seconds: item.raw.timings.compress_seconds),
-      (phase: "buffer/overhead", seconds: timing-value(item, "allocation_and_overhead_seconds")),
-    )
-  } else {
-    let round-prepare = timing-value(
-      item,
-      "round_prepare_seconds",
-      fallback: timing-value(item, "round_reset_seconds") + timing-value(item, "initialize_best_seconds"),
-    )
-    (
-      (phase: "setup", seconds: timing-value(item, "setup_seconds")),
-      (phase: "host-device", seconds: timing-value(item, "host_to_device_seconds")),
-      (phase: "init parent", seconds: timing-value(item, "initialization_seconds")),
-      (phase: "round prep", seconds: round-prepare),
-      (phase: "scan", seconds: timing-value(item, "scan_seconds")),
-      (
-        phase: "contract",
-        seconds: timing-value(item, "contract_kernel_seconds", fallback: timing-value(item, "contract_seconds")),
-      ),
-      (phase: "copy flags", seconds: timing-value(item, "contract_copy_seconds")),
-      (phase: "compress", seconds: timing-value(item, "compress_seconds")),
-      (phase: "device-host", seconds: timing-value(item, "device_to_host_seconds")),
-      (phase: "launch/residuo", seconds: timing-value(item, "kernel_launch_overhead_estimated_seconds")),
-    )
-  }
-  phases.filter(phase => phase.seconds > 0)
-}
-
-#let profiled-seconds(item) = timing-breakdown(item).map(phase => phase.seconds).sum()
-#let unprofiled-mst-seconds(item) = item.loop - profiled-seconds(item)
-#let setup-before-loop-seconds(item) = item.total - item.loop
-
-#let log2-worker(item) = {
-  let p = worker-count(item)
-  if p <= 1 {
-    0
-  } else if p <= 2 {
-    1
-  } else if p <= 4 {
-    2
-  } else if p <= 8 {
-    3
-  } else if p <= 16 {
-    4
-  } else if p <= 32 {
-    5
-  } else if p <= 64 {
-    6
-  } else if p <= 128 {
-    7
-  } else {
-    8
-  }
-}
-
-#let cuda-sm-parallelism(item) = item.raw.capabilities.multiprocessor_count
-
-#let random-sweep-reference-seconds(item) = {
-  let matches = random-sweep-runs.filter(run => run.edges == item.edges)
-  matches.map(sequential-cpu-seconds).sum() / matches.len()
-}
-
-#let random-sweep-speedup(item) = random-sweep-reference-seconds(item) / algorithm-seconds(item)
-#let random-sweep-backend-loop-speedup(item) = random-sweep-reference-seconds(item) / item.loop
-#let random-sweep-efficiency(item) = random-sweep-speedup(item) / worker-count(item)
-
-#let random-sweep-theoretical-speedup(item) = {
+// Speedup teorico ideale S_p = T_s / T_p, calcolato dalle formule del
+// Capitolo 2 (@eq:mpi-speedup, @eq:omp-speedup, @eq:cuda-sm-speedup) usando
+// solo |E|, |V| e p (per CUDA, q = cuda-sm-count): non richiede una baseline
+// sequenziale misurata.
+#let theoretical-speedup(item) = {
   let n = item.vertices
   let m = item.edges
   let p = worker-count(item)
   if item.backend == "mpi" {
-    m / (m / p + n * log2-worker(item))
+    m / (m / p + n * log2(p))
   } else if item.backend == "openmp" {
     (m + n) / (m / p + n)
   } else {
-    let q = cuda-sm-parallelism(item)
-    q
+    cuda-sm-count * cuda-normalized-efficiency(item)
   }
 }
 
-#let random-sweep-theoretical-speedup-at-density(backend, density) = {
-  let reference = random-sweep-by-backend(backend).at(0)
-  let n = reference.vertices
-  let m = density * n
+#let theoretical-efficiency(item) = {
+  if item.backend == "cuda" {
+    cuda-normalized-efficiency(item)
+  } else {
+    theoretical-speedup(item) / worker-count(item)
+  }
+}
+
+// Soglia operativa di isoefficienza @eq:mpi-threshold / @eq:omp-threshold /
+// @eq:cuda-threshold, valutata al grado di parallelismo p (o |V|) usato dalle run.
+#let isoefficiency-threshold(backend) = {
+  let reference = by-backend(backend).at(0)
   let p = worker-count(reference)
   if backend == "mpi" {
-    m / (m / p + n * log2-worker(reference))
+    p * log2(p)
   } else if backend == "openmp" {
-    (m + n) / (m / p + n)
+    p
   } else {
-    let q = cuda-sm-parallelism(reference)
-    q
-  }
-}
-
-#let random-sweep-half-efficiency-speedup(item) = worker-count(item) / 2
-
-#let random-sweep-first(backend, predicate) = {
-  let matches = random-sweep-by-backend(backend).filter(predicate)
-  if matches.len() == 0 {
-    none
-  } else {
-    matches.at(0)
-  }
-}
-
-#let random-sweep-first-speedup-crossover(backend) = random-sweep-first(
-  backend,
-  item => random-sweep-speedup(item) >= 1,
-)
-
-#let random-sweep-first-half-efficiency(backend) = {
-  random-sweep-first(
-    backend,
-    item => random-sweep-speedup(item) >= random-sweep-half-efficiency-speedup(item),
-  )
-}
-
-#let isoefficiency-density-threshold(backend) = {
-  let reference = random-sweep-by-backend(backend).at(0)
-  if backend == "mpi" {
-    worker-count(reference) * log2-worker(reference)
-  } else if backend == "openmp" {
-    worker-count(reference)
-  } else {
-    none
+    log2(reference.vertices)
   }
 }
 
 #let isoefficiency-threshold-label(backend) = {
-  let threshold = isoefficiency-density-threshold(backend)
-  if threshold == none {
-    [nessuna soglia asintotica]
+  let threshold = isoefficiency-threshold(backend)
+  [$frac(|E|, |V|) >= #calc.round(threshold, digits: 2)$]
+}
+
+// Tempo sequenziale T_s misurato da src/sequential.cpp (stesso grafo, stesso
+// seed, stessa densità) -- baseline per lo speedup misurato.
+#let sequential-exec-at-density(density) = by-backend("sequential").filter(item => item.density == density).at(0).exec
+
+// Speedup misurato S_p = T_s / T_p, con T_s dalla run sequential.cpp alla
+// stessa densità e T_p = item.exec.
+#let measured-speedup(item) = sequential-exec-at-density(item.density) / item.exec
+
+// Efficienza misurata E_p = S_p / p (per CUDA, p = cuda-sm-count = 142 SM).
+#let measured-efficiency(item) = {
+  if item.backend == "cuda" {
+    measured-speedup(item) / cuda-sm-count
   } else {
-    [$frac(|E|, |V|) >= #threshold$]
+    measured-speedup(item) / worker-count(item)
   }
 }
 
+// Regressione lineare ai minimi quadrati: usata per leggere la pendenza del
+// tempo misurato in funzione della densità e confrontarla con la forma
+// prevista da T_p(d) nel Capitolo 2.
 #let linear-fit(items, x-value, y-value) = {
   let count = items.len()
-  if count == 0 {
-    return (intercept: 0.0, slope: 0.0)
-  }
   let sx = items.map(x-value).sum()
   let sy = items.map(y-value).sum()
   let sxx = items.map(item => x-value(item) * x-value(item)).sum()
@@ -354,51 +181,6 @@
 
 #let fit-seconds(fit, density) = fit.intercept + fit.slope * density
 
-#let random-sweep-cpu-fit = linear-fit(
-  random-sweep-by-backend("mpi"),
-  edge-density,
-  random-sweep-reference-seconds,
-)
+#let backend-exec-fit(backend) = linear-fit(by-backend(backend), item => item.density, item => item.exec)
 
-#let random-sweep-backend-fit(backend) = linear-fit(
-  random-sweep-by-backend(backend),
-  edge-density,
-  algorithm-seconds,
-)
-
-#let random-sweep-cpu-fit-seconds(item) = fit-seconds(random-sweep-cpu-fit, edge-density(item))
-
-#let random-sweep-backend-fit-seconds(item) = {
-  fit-seconds(random-sweep-backend-fit(item.backend), edge-density(item))
-}
-
-#let random-sweep-fit-crossover-density(backend) = {
-  let backend-fit = random-sweep-backend-fit(backend)
-  let denominator = backend-fit.slope - random-sweep-cpu-fit.slope
-  if denominator == 0 {
-    none
-  } else {
-    (random-sweep-cpu-fit.intercept - backend-fit.intercept) / denominator
-  }
-}
-
-#let random-sweep-crossover-density(backend) = {
-  let fitted = random-sweep-fit-crossover-density(backend)
-  let first-measured = random-sweep-first-speedup-crossover(backend)
-  if fitted != none and fitted > 0 {
-    fitted
-  } else if first-measured != none {
-    edge-density(first-measured)
-  } else {
-    none
-  }
-}
-
-#let random-sweep-crossover-label(backend) = {
-  let fitted = random-sweep-fit-crossover-density(backend)
-  if fitted != none and fitted > 0 {
-    [soglia fitted]
-  } else {
-    [primo $S >= 1$]
-  }
-}
+#let backend-exec-fit-seconds(item) = fit-seconds(backend-exec-fit(item.backend), item.density)

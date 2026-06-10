@@ -30,18 +30,21 @@ ifneq ($(strip $(NVCC_CCBIN)),)
 NVCC_CCBIN_FLAG := -ccbin $(NVCC_CCBIN)
 endif
 
+SEQUENTIAL_SRC := src/sequential.cpp
 OPENMP_SRC := src/openmp.cpp
 MPI_SRC := src/mpi.cpp
 CUDA_SRC := src/cuda.cu
 
+SEQUENTIAL_BIN := $(BUILD_DIR)/sequential_app
 OPENMP_BIN := $(BUILD_DIR)/openmp_app
 MPI_BIN := $(BUILD_DIR)/mpi_app
 CUDA_BIN := $(BUILD_DIR)/cuda_app
 
-.PHONY: help all openmp mpi cuda clean
+.PHONY: help all sequential openmp mpi cuda clean
 
 help:
 	@printf '%s\n' 'Target per il cluster (Slurm), senza CMake/Ninja:'
+	@printf '%s\n' '  make sequential CXX=g++'
 	@printf '%s\n' '  make openmp CXX=g++'
 	@printf '%s\n' '  make mpi MPICXX=mpicxx'
 	@printf '%s\n' '  make cuda NVCC=nvcc NVCC_CCBIN=g++'
@@ -49,11 +52,15 @@ help:
 	@printf '%s\n' ''
 	@printf '%s\n' 'Per lo sviluppo locale preferire i preset CMake (Ninja).'
 
-all: openmp mpi cuda
+all: sequential openmp mpi cuda
 
+sequential: $(SEQUENTIAL_BIN)
 openmp: $(OPENMP_BIN)
 mpi: $(MPI_BIN)
 cuda: $(CUDA_BIN)
+
+$(SEQUENTIAL_BIN): $(SEQUENTIAL_SRC) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(CXXSTD) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(OPENMP_BIN): $(OPENMP_SRC) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(CXXSTD) $(OPENMP_FLAGS) $< -o $@ $(LDFLAGS) $(OPENMP_FLAGS) $(LDLIBS)

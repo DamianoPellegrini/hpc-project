@@ -19,6 +19,10 @@ cd "$EXPERIMENT_DIR"
 # prima del lancio; i tre script per-backend la leggono già.
 export RANDOM_EDGES_LIST="${RANDOM_EDGES_LIST:-32768,65536,131072,196608,393216,786432,1572864,3145728,6291456,12582912}"
 
+sequential_job_id="$(
+  sbatch --parsable --export=ALL \
+    "$REPO_DIR/scripts/slurm/sequential.sh"
+)"
 openmp_job_id="$(
   sbatch --parsable --export=ALL \
     "$REPO_DIR/scripts/slurm/openmp.sh"
@@ -33,6 +37,7 @@ cuda_job_id="$(
 )"
 
 printf '%s\n' \
+  "Submitted sequential job: $sequential_job_id" \
   "Submitted OpenMP job: $openmp_job_id" \
   "Submitted MPI job: $mpi_job_id" \
   "Submitted CUDA job: $cuda_job_id"

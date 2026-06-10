@@ -20,6 +20,8 @@ if(APPLE)
   endforeach()
 endif()
 
+add_executable(sequential_app src/sequential.cpp)
+
 find_package(OpenMP COMPONENTS CXX QUIET)
 if(OpenMP_CXX_FOUND)
   set(MST_OPENMP_STATUS "found; building openmp_app")
