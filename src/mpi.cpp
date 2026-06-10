@@ -136,18 +136,19 @@ static bool read_graph(const char* path, int& V, std::vector<Edge>& edges) {
     return true;
 }
 
-static void generate_graph(int V, int extra, std::vector<Edge>& edges,
+static void generate_graph(int V, int m, std::vector<Edge>& edges,
                            unsigned seed = 42) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> wd(1.0, 100.0);
+    edges.reserve(m);
     // random spanning tree -> guarantees connectivity
     for (int i = 1; i < V; ++i) {
         std::uniform_int_distribution<int> pd(0, i - 1);
         edges.push_back({i, pd(rng), std::round(wd(rng))});
     }
-    // extra random edges
+    // archi casuali finché il grafo non ha esattamente m archi
     std::uniform_int_distribution<int> vd(0, V - 1);
-    for (int k = 0; k < extra; ++k) {
+    while (static_cast<int>(edges.size()) < m) {
         int a = vd(rng), b = vd(rng);
         if (a != b) edges.push_back({a, b, std::round(wd(rng))});
     }
@@ -196,7 +197,7 @@ int main(int argc, char** argv) {
     double to0 = MPI_Wtime();
 
     // rank 0 builds the graph: `<graph_file>` (1 arg) carica da file,
-    // `<n> <extra_edges> <seed>` (3 arg) genera un grafo casuale connesso —
+    // `<n> <edges> <seed>` (3 arg) genera un grafo casuale connesso —
     // STESSA interfaccia posizionale di OpenMP/CUDA per il path generato.
     int V = 0, E = 0;
     std::vector<Edge> edges;          // only meaningful on rank 0
@@ -208,9 +209,9 @@ int main(int argc, char** argv) {
             }
         } else {
             V = (argc > 1) ? std::atoi(argv[1]) : 20000;
-            int extra_edges = (argc > 2) ? std::atoi(argv[2]) : 8 * V;
+            int m = (argc > 2) ? std::atoi(argv[2]) : 8 * V;
             unsigned seed = (argc > 3) ? (unsigned)std::strtoul(argv[3], nullptr, 10) : 42u;
-            generate_graph(V, extra_edges, edges, seed);
+            generate_graph(V, m, edges, seed);
         }
         E = static_cast<int>(edges.size());
         std::cout << "Graph: V=" << V << " E=" << E
@@ -241,7 +242,7 @@ int main(int argc, char** argv) {
     std::vector<int> comp(V);                       // comp[v] = root of v
     std::iota(comp.begin(), comp.end(), 0);
 
-    std::vector<CandEdge> best(V), link_buf;
+    std::vector<CandEdge> best(V), best_recv(V);
     std::vector<int>      link(V);
     std::vector<CandEdge> mst;                      // chosen MST edges
     double mst_weight = 0.0;
@@ -263,8 +264,11 @@ int main(int argc, char** argv) {
         }
 
         // 2. global lightest outgoing edge per component
-        MPI_Allreduce(MPI_IN_PLACE, best.data(), V, cand_type,
+        // Buffer separati: MPI_IN_PLACE con operatori custom causa segfault
+        // nel trasporto shared-memory di OpenMPI su array grandi.
+        MPI_Allreduce(best.data(), best_recv.data(), V, cand_type,
                       cand_op, MPI_COMM_WORLD);
+        best.swap(best_recv);
 
         // 3. deterministic union-find merge (identical on every rank)
         std::iota(link.begin(), link.end(), 0);
@@ -277,7 +281,7 @@ int main(int argc, char** argv) {
         std::vector<CandEdge> chosen;
         chosen.reserve(64);
         for (int c = 0; c < V; ++c)
-            if (comp[c] == c && best[c].gid != -1) chosen.push_back(best[c]);
+            if (comp[c] == c && best[c].gid != INT_MAX) chosen.push_back(best[c]);
         std::sort(chosen.begin(), chosen.end(),
                   [](const CandEdge& a, const CandEdge& b) { return a.gid < b.gid; });
         chosen.erase(std::unique(chosen.begin(), chosen.end(),

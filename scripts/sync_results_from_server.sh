@@ -6,7 +6,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/sync_results_from_server.sh [options]
 
-Sync benchmark JSON results from the remote server into this local checkout.
+Sync benchmark JSON/CSV results from the remote server into this local checkout.
 
 Options:
   -n, --dry-run                  Show what would be copied without copying
@@ -66,6 +66,7 @@ rsync_args=(
   --prune-empty-dirs
   --include='*/'
   --include='*.json'
+  --include='*.csv'
   --exclude='*'
 )
 

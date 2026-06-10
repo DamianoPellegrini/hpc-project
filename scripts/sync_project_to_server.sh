@@ -67,8 +67,10 @@ rsync_args=(
   --exclude='AGENTS.md'
   --exclude='agents.md'
   --exclude='Presentazione nv-link/'
-  --exclude='BBBBB'
   --exclude='docs/'
+  --exclude='old-results/'
+  --exclude='results/'
+  --exclude='old/'
 )
 
 if [[ "$dry_run" -eq 1 ]]; then

@@ -3,7 +3,7 @@
 #SBATCH --job-name=parallel-mst-openmp
 #SBATCH --partition=ulow
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=4G
 #SBATCH --time=00:30:00
 #SBATCH --output=job_logs/out_%x_%j.log
@@ -15,67 +15,49 @@ set -euo pipefail
 export REPO_DIR="${REPO_DIR:-$HOME/hpc-project}"
 export EXPERIMENT_DIR="${EXPERIMENT_DIR:-$HOME/experiments/parallel-mst}"
 export RESULTS_DIR="$EXPERIMENT_DIR/results"
-GRAPHS="${GRAPHS:-random}"
 RANDOM_VERTICES="${RANDOM_VERTICES:-32768}"
-RANDOM_EXTRA_EDGES="${RANDOM_EXTRA_EDGES:-196608}"
 RANDOM_SEED="${RANDOM_SEED:-886261}"
-RANDOM_MAX_WEIGHT="${RANDOM_MAX_WEIGHT:-10000}"
-graph_list="${GRAPHS//,/ }"
-read -r -a graphs <<< "$graph_list"
-extra_edge_list="${RANDOM_EXTRA_EDGES_LIST:-$RANDOM_EXTRA_EDGES}"
-extra_edge_list="${extra_edge_list//,/ }"
-read -r -a random_extra_edges_values <<< "$extra_edge_list"
+edges_list="${RANDOM_EDGES_LIST:-32768,65536,131072,196608,393216,786432,1572864,3145728,6291456,12582912}"
+read -r -a edges_values <<< "${edges_list//,/ }"
 
 mkdir -p "$EXPERIMENT_DIR/job_logs" "$RESULTS_DIR"
 
 pwd
 hostname
 date
-printf 'graphs=%s vertices=%s extra_edges=%s seed=%s max_weight=%s\n' \
-  "$GRAPHS" "$RANDOM_VERTICES" "$RANDOM_EXTRA_EDGES" \
-  "$RANDOM_SEED" "$RANDOM_MAX_WEIGHT"
-if [[ -n "${RANDOM_EXTRA_EDGES_LIST:-}" ]]; then
-  printf 'RANDOM_EXTRA_EDGES_LIST=%s\n' "$RANDOM_EXTRA_EDGES_LIST"
-fi
+printf 'vertices=%s seed=%s edges_list=%s\n' \
+  "$RANDOM_VERTICES" "$RANDOM_SEED" "$edges_list"
 
 module purge
 module load amd/gcc/gcc-12
 
 cd "$REPO_DIR"
-make USE_CMAKE=OFF openmp CXX=g++
+make openmp CXX=g++
 
-run_graph() {
-  local graph="$1"
-  local extra_edges="$2"
-  local resource_suffix="t${SLURM_CPUS_PER_TASK:-1}"
-  local report_name
-  if [[ "$graph" == "random" ]]; then
-    report_name="openmp_${graph}_v${RANDOM_VERTICES}_e${extra_edges}_s${RANDOM_SEED}_w${RANDOM_MAX_WEIGHT}_${resource_suffix}_${SLURM_JOB_ID}.json"
-  else
-    report_name="openmp_${graph}_${resource_suffix}_${SLURM_JOB_ID}.json"
-  fi
-  report_path="$RESULTS_DIR/$report_name"
-  args=(--graph "$graph" --report "$report_path" --benchmark)
-  if [[ "$graph" == "random" ]]; then
-    args+=(
-      --random-vertices "$RANDOM_VERTICES"
-      --random-extra-edges "$extra_edges"
-      --random-seed "$RANDOM_SEED"
-      --random-max-weight "$RANDOM_MAX_WEIGHT"
-    )
-  fi
-  printf 'Running OpenMP graph=%s report=%s\n' "$graph" "$report_path"
-  ./build/openmp/openmp_app "${args[@]}"
-}
+# Borůvka resta su un solo task: i thread OpenMP usano tutte le CPU allocate.
+resources="${SLURM_CPUS_PER_TASK:-1}"
+csv_path="$RESULTS_DIR/openmp_${SLURM_JOB_ID}.csv"
+printf 'backend,vertices,edges,density,seed,resources,overhead_seconds,exec_seconds,total_seconds,verified\n' \
+  > "$csv_path"
 
-for graph in "${graphs[@]}"; do
-  if [[ "$graph" == "random" ]]; then
-    for extra_edges in "${random_extra_edges_values[@]}"; do
-      run_graph "$graph" "$extra_edges"
-    done
-  else
-    run_graph "$graph" "$RANDOM_EXTRA_EDGES"
-  fi
+# `edges` è il secondo argomento posizionale del programma: il numero totale
+# di archi del grafo generato (src/openmp.cpp genera esattamente questo
+# numero di archi), quindi density = edges/vertices è la densità esatta.
+for edges in "${edges_values[@]}"; do
+  printf 'Running OpenMP vertices=%s edges=%s seed=%s threads=%s\n' \
+    "$RANDOM_VERTICES" "$edges" "$RANDOM_SEED" "$resources"
+  out="$(./build/openmp_app "$RANDOM_VERTICES" "$edges" "$RANDOM_SEED")"
+  printf '%s\n' "$out"
+
+  overhead="$(grep -o 'overhead_seconds=[0-9.]*' <<<"$out" | cut -d= -f2)"
+  exec_t="$(grep -o 'exec_seconds=[0-9.]*'      <<<"$out" | cut -d= -f2)"
+  total="$(grep -o 'total_seconds=[0-9.]*'      <<<"$out" | cut -d= -f2)"
+  verified="$(grep -o 'verification=[A-Z]*'      <<<"$out" | cut -d= -f2)"
+  density="$(awk -v e="$edges" -v v="$RANDOM_VERTICES" 'BEGIN{printf "%.4f", e/v}')"
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    openmp "$RANDOM_VERTICES" "$edges" "$density" "$RANDOM_SEED" "$resources" \
+    "$overhead" "$exec_t" "$total" "$verified" >> "$csv_path"
 done
 
+printf 'CSV written to %s\n' "$csv_path"
 date

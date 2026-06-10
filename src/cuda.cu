@@ -327,7 +327,8 @@ double kruskal_weight(int nv, const std::vector<int>& s, const std::vector<int>&
 }
 
 // ----------------------------------------------------------------------------
-// Random CONNECTED graph generator (random spanning tree + extra edges)
+// Random CONNECTED graph generator (random spanning tree + archi casuali fino
+// a raggiungere esattamente target_m archi)
 // ----------------------------------------------------------------------------
 void gen_graph(int nv, int target_m, unsigned seed, std::vector<int>& s,
                std::vector<int>& d, std::vector<float>& w) {
@@ -347,7 +348,7 @@ void gen_graph(int nv, int target_m, unsigned seed, std::vector<int>& s,
     w.push_back(wd(rng));
   }
   std::uniform_int_distribution<int> vrand(0, nv - 1);
-  while (static_cast<int>(s.size()) < target_m) { // extra random edges
+  while (static_cast<int>(s.size()) < target_m) {
     int a = vrand(rng), b = vrand(rng);
     if (a == b)
       continue;
@@ -357,12 +358,11 @@ void gen_graph(int nv, int target_m, unsigned seed, std::vector<int>& s,
   }
 }
 
-// Uso: boruvka_cuda <n> <extra_edges> <seed>
+// Uso: boruvka_cuda <n> <edges> <seed>
 int main(int argc, char** argv) {
   int nv = (argc > 1) ? std::atoi(argv[1]) : 100000;
-  int extra_edges = (argc > 2) ? std::atoi(argv[2]) : 900000;
+  int m = (argc > 2) ? std::atoi(argv[2]) : 900000;
   unsigned sd = (argc > 3) ? static_cast<unsigned>(std::atoi(argv[3])) : 42u;
-  int m = (nv - 1) + extra_edges; // stessa convenzione di OpenMP/MPI
 
   // ---- overhead: generazione grafo + alloc/copie H2D/D2H -----------
   auto to0 = std::chrono::high_resolution_clock::now();

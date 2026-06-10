@@ -150,11 +150,11 @@ long long kruskalMST(int n, std::vector<Edge> edges) {
   return total;
 }
 
-// Uso: boruvka_omp <n> <extra_edges> <seed>
+// Uso: boruvka_omp <n> <edges> <seed>
 // TODO: Stampa uno usage
 int main(int argc, char** argv) {
   const int n = (argc > 1) ? std::atoi(argv[1]) : 200000;
-  const long long extraEdges = (argc > 2) ? std::atoll(argv[2]) : 2000000;
+  const long long m = (argc > 2) ? std::atoll(argv[2]) : 2000000;
   const unsigned seed =
       (argc > 3) ? (unsigned)std::strtoul(argv[3], nullptr, 10) : 12345u;
 
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
   auto to0 = std::chrono::high_resolution_clock::now();
   std::mt19937 rng(seed);
   std::vector<Edge> edges;
-  edges.reserve(n - 1 + extraEdges);
+  edges.reserve(m);
 
   // Spanning tree casuale -> garantisce la connessione.
   std::vector<int> perm(n);
@@ -174,9 +174,9 @@ int main(int argc, char** argv) {
     int parent = perm[rng() % i];
     edges.push_back({perm[i], parent, wdist(rng)});
   }
-  // Archi extra casuali.
+  // Archi casuali finché il grafo non ha esattamente m archi.
   std::uniform_int_distribution<int> vdist(0, n - 1);
-  for (long long e = 0; e < extraEdges; ++e) {
+  while (static_cast<long long>(edges.size()) < m) {
     int u = vdist(rng), v = vdist(rng);
     if (u != v)
       edges.push_back({u, v, wdist(rng)});

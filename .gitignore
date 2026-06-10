@@ -5,5 +5,8 @@
 *.swo
 /docs/local/
 /results
+/old-results
 /job_logs
 /report/main.pdf
+/Presentazione nv-link/
+/docs/
