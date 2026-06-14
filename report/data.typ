@@ -36,8 +36,8 @@
 
 #let run-at-density(backend, density) = by-backend(backend).filter(item => item.density == density).at(0)
 
-// Densità di riferimento usata per tabelle/grafici a singolo punto: stesso
-// valore (|E|=196608, |V|=32768) della run "random" della versione precedente.
+// Densità di riferimento usata per tabelle/grafici a singolo punto
+// (|E|=196608, |V|=32768).
 #let reference-density = 6.0
 
 #let reference-runs = backends.map(backend => run-at-density(backend, reference-density))
@@ -108,7 +108,7 @@
   let m = item.edges
   let p = worker-count(item)
   if item.backend == "mpi" {
-    m / (m / p + n * log2(p))
+    (m + n) / (m / p + n * log2(p))
   } else if item.backend == "openmp" {
     (m + n) / (m / p + n)
   } else {
@@ -124,7 +124,7 @@
   }
 }
 
-// Soglia operativa di isoefficienza @eq:mpi-threshold / @eq:omp-threshold /
+// Soglia di isoefficienza @eq:mpi-threshold / @eq:omp-threshold /
 // @eq:cuda-threshold, valutata al grado di parallelismo p (o |V|) usato dalle run.
 #let isoefficiency-threshold(backend) = {
   let reference = by-backend(backend).at(0)
@@ -140,7 +140,7 @@
 
 #let isoefficiency-threshold-label(backend) = {
   let threshold = isoefficiency-threshold(backend)
-  [$frac(|E|, |V|) >= #calc.round(threshold, digits: 2)$]
+  [$frac(|cal(E)|, |cal(V)|) >= #calc.round(threshold, digits: 2)$]
 }
 
 // Tempo sequenziale T_s misurato da src/sequential.cpp (stesso grafo, stesso
@@ -150,37 +150,3 @@
 // Speedup misurato S_p = T_s / T_p, con T_s dalla run sequential.cpp alla
 // stessa densità e T_p = item.exec.
 #let measured-speedup(item) = sequential-exec-at-density(item.density) / item.exec
-
-// Efficienza misurata E_p = S_p / p (per CUDA, p = cuda-sm-count = 142 SM).
-#let measured-efficiency(item) = {
-  if item.backend == "cuda" {
-    measured-speedup(item) / cuda-sm-count
-  } else {
-    measured-speedup(item) / worker-count(item)
-  }
-}
-
-// Regressione lineare ai minimi quadrati: usata per leggere la pendenza del
-// tempo misurato in funzione della densità e confrontarla con la forma
-// prevista da T_p(d) nel Capitolo 2.
-#let linear-fit(items, x-value, y-value) = {
-  let count = items.len()
-  let sx = items.map(x-value).sum()
-  let sy = items.map(y-value).sum()
-  let sxx = items.map(item => x-value(item) * x-value(item)).sum()
-  let sxy = items.map(item => x-value(item) * y-value(item)).sum()
-  let denominator = count * sxx - sx * sx
-  if denominator == 0 {
-    (intercept: sy / count, slope: 0.0)
-  } else {
-    let slope = (count * sxy - sx * sy) / denominator
-    let intercept = (sy - slope * sx) / count
-    (intercept: intercept, slope: slope)
-  }
-}
-
-#let fit-seconds(fit, density) = fit.intercept + fit.slope * density
-
-#let backend-exec-fit(backend) = linear-fit(by-backend(backend), item => item.density, item => item.exec)
-
-#let backend-exec-fit-seconds(item) = fit-seconds(backend-exec-fit(item.backend), item.density)

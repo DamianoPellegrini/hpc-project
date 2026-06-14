@@ -34,13 +34,12 @@
 
   figure(
     hbar-chart(entries, width: 12.0, height: 6, row-height: 1.4),
-    caption: [Tempo totale (overhead + esecuzione) alla densità di riferimento $|E| slash |V| = #calc.round(reference-density, digits: 0)$, per backend.],
+    caption: [Tempo totale (overhead + esecuzione) alla densità di riferimento $|cal(E)| slash |cal(V)| = #calc.round(reference-density, digits: 0)$, per backend.],
   )
 }
 
 // Barre impilate overhead + esecuzione per ciascun backend, alla densità di
-// riferimento. Sostituisce il vecchio breakdown per fasi (scan/reduce/
-// contract/compress), non più disponibile nei nuovi CSV.
+// riferimento.
 #let reference-breakdown-stacked-chart = {
   let legend-entry(label, fill) = stack(
     dir: ltr,
@@ -115,7 +114,7 @@
       }),
       stack-legend,
     ),
-    caption: [Quota di overhead ed esecuzione pura sul tempo totale, alla densità di riferimento $|E| slash |V| = #calc.round(reference-density, digits: 0)$, per backend.],
+    caption: [Quota di overhead ed esecuzione pura sul tempo totale, alla densità di riferimento $|cal(E)| slash |cal(V)| = #calc.round(reference-density, digits: 0)$, per backend.],
   )
 }
 
@@ -135,7 +134,7 @@
       size: (12, 6.5),
       axis-style: "left",
       legend: "north",
-      x-label: [densità $|E| slash |V|$],
+      x-label: [densità $|cal(E)| slash |cal(V)|$],
       y-label: [tempo totale],
       x-mode: "log",
       x-base: 10,
@@ -172,11 +171,11 @@
 
 #let total-vs-density-chart = figure(
   total-vs-density-plot,
-  caption: [Tempo totale (overhead + esecuzione) misurato sulla sweep `random`, in funzione della densità $|E| slash |V|$, per i tre backend.],
+  caption: [Tempo totale (overhead + esecuzione) misurato sulla carrellata di run, in funzione della densità $|cal(E)| slash |cal(V)|$, per i tre backend.],
 )
 
 // Speedup teorico ideale S_p (@eq:mpi-speedup, @eq:omp-speedup,
-// @eq:cuda-sm-speedup), funzione solo di |E|, |V| e p: nessuna baseline
+// @eq:cuda-sm-speedup), funzione solo di |cal(E)|, |cal(V)| e p: nessuna baseline
 // sequenziale misurata necessaria. Per CUDA, p = q = cuda-sm-count (142 SM,
 // NVIDIA L40S).
 #let theoretical-speedup-plot = {
@@ -196,7 +195,7 @@
       size: (12, 6.5),
       axis-style: "left",
       legend: "north",
-      x-label: [densità $|E| slash |V|$],
+      x-label: [densità $|cal(E)| slash |cal(V)|$],
       y-label: [speedup teorico $S_p$],
       x-mode: "log",
       x-base: 10,
@@ -240,10 +239,10 @@
 
 #let theoretical-speedup-chart = figure(
   theoretical-speedup-plot,
-  caption: [Speedup teorico ideale $S_p = T_s slash T_p$ (@eq:mpi-speedup, @eq:omp-speedup, @eq:cuda-sm-speedup) in funzione della densità, calcolato da $|E|$, $|V|$ e $p$ -- nessuna baseline sequenziale misurata è richiesta. Per CUDA, $p=q=142$ (numero di SM della NVIDIA L40S usata per le run): la curva satura rapidamente vicino a $q$ perché $E_p^("CUDA")$ tende a $1$ per densità crescenti.],
+  caption: [Speedup teorico ideale $S_p = T_s slash T_p$ (@eq:mpi-speedup, @eq:omp-speedup, @eq:cuda-sm-speedup) in funzione della densità, calcolato da $|cal(E)|$, $|cal(V)|$ e $p$ -- nessuna baseline sequenziale misurata è richiesta. Per CUDA, $p=q=142$ (numero di SM della NVIDIA L40S usata per le run): la curva satura rapidamente vicino a $q$ perché $E_p^("CUDA")$ tende a $1$ per densità crescenti.],
 )
 
-// Efficienza teorica E_p = S_p / p, con la soglia operativa E_min = 1/2
+// Efficienza teorica E_p = S_p / p, con la soglia di efficienza E_min = 1/2
 // (@eq:half-efficiency) come riferimento.
 #let theoretical-efficiency-plot = {
   let theory-backends = backends
@@ -262,7 +261,7 @@
       size: (12, 6.5),
       axis-style: "left",
       legend: "north",
-      x-label: [densità $|E| slash |V|$],
+      x-label: [densità $|cal(E)| slash |cal(V)|$],
       y-label: [efficienza teorica $E_p = S_p slash p$],
       x-mode: "log",
       x-base: 10,
@@ -306,7 +305,7 @@
 
 #let theoretical-efficiency-chart = figure(
   theoretical-efficiency-plot,
-  caption: [Efficienza teorica $E_p = S_p slash p$ in funzione della densità, per i tre backend. Per CUDA $p=q$ (numero di SM) e $E_p$ si riduce a $(d+1)slash(d+log_2|V|)$ (@eq:cuda-sm-speedup), indipendente da $q$. La linea tratteggiata è la soglia operativa $E_("min") = 1/2$ (@eq:half-efficiency): MPI la raggiunge per #isoefficiency-threshold-label("mpi"), OpenMP per #isoefficiency-threshold-label("openmp"), CUDA per #isoefficiency-threshold-label("cuda").],
+  caption: [Efficienza teorica $E_p = S_p slash p$ in funzione della densità, per i tre backend. Per CUDA $p=q$ (numero di SM) e $E_p$ si riduce a $(d+1)slash(d+log_2|cal(V)|)$ (@eq:cuda-sm-speedup), indipendente da $q$. La linea tratteggiata è la soglia di efficienza $E_("min") = 1/2$ (@eq:half-efficiency): MPI la raggiunge per #isoefficiency-threshold-label("mpi"), OpenMP per #isoefficiency-threshold-label("openmp"), CUDA per #isoefficiency-threshold-label("cuda").],
 )
 
 // Speedup misurato S_p = T_s / T_p (linea continua, T_s da src/sequential.cpp
@@ -330,7 +329,7 @@
       axis-style: "left",
       legend: "north",
       legend-style: (item-spacing: (.6, .4)),
-      x-label: [densità $|E| slash |V|$],
+      x-label: [densità $|cal(E)| slash |cal(V)|$],
       y-label: [speedup $S_p$],
       x-mode: "log",
       x-base: 10,
